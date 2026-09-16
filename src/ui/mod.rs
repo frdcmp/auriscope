@@ -17,16 +17,23 @@ use egui::TextureHandle;
 use serde::{Deserialize, Serialize};
 
 use auriscope::analysis::{
-    ColorMap, DetailTile, FileStats, LiveSpectrum, Spectrogram, StftParams, WaveformPyramid,
-    compute_stats,
+    ColorMap, CustomStops, DEFAULT_CUSTOM, DetailTile, FileStats, LiveSpectrum, Spectrogram,
+    StftParams, WaveformPyramid, compute_stats,
 };
 use auriscope::audio::{DecodedAudio, Engine, decode_file};
+
+/// Default waveform colour: the blue the app has always drawn.
+pub const DEFAULT_WAVE_COLOR: [u8; 3] = [86, 156, 214];
 
 /// Everything that survives a restart.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
     pub colormap: ColorMap,
+    /// Quiet, medium and loud colours for `ColorMap::Custom`.
+    pub custom_stops: CustomStops,
+    /// Waveform colour; its RMS overlay is a lighter tint of it.
+    pub wave_color: [u8; 3],
     pub stft: StftParams,
     pub db_min: f32,
     pub db_max: f32,
@@ -61,6 +68,8 @@ impl Default for Settings {
     fn default() -> Self {
         Self {
             colormap: ColorMap::Amber,
+            custom_stops: DEFAULT_CUSTOM,
+            wave_color: DEFAULT_WAVE_COLOR,
             stft: StftParams::default(),
             db_min: -90.0,
             db_max: 0.0,
@@ -793,6 +802,8 @@ impl App {
                 {
                     let sr = self.sample_rate();
                     self.range = Some((a.min(b) * sr, a.max(b) * sr));
+                    // The highlight too, as if the drag had just ended.
+                    self.selection = self.range;
                     self.loop_enabled = true;
                     self.apply_loop();
                 }

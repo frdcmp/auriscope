@@ -29,6 +29,7 @@ pub struct TexKey {
     size: [usize; 2],
     params: ViewParams,
     colormap: auriscope::analysis::ColorMap,
+    custom_stops: auriscope::analysis::CustomStops,
     contrast_bits: u32,
     spec_ptr: usize,
     /// Identity of the detail tile in use, so the texture is rebuilt the
@@ -47,10 +48,19 @@ const MIN_STRIP: f32 = 48.0;
 pub const V_ZOOM_MIN: f32 = 0.1;
 pub const V_ZOOM_MAX: f32 = 4096.0;
 const BG: Color32 = Color32::from_rgb(18, 18, 22);
-const WAVE_FILL: Color32 = Color32::from_rgb(86, 156, 214);
-const WAVE_RMS: Color32 = Color32::from_rgb(160, 210, 255);
+/// RMS overlay colour for a given waveform colour: the same hue, lifted
+/// halfway to white so it reads on top of the peaks.
+fn rms_color(wave: Color32) -> Color32 {
+    let lift = |v: u8| (v as u16 + (255 - v as u16) / 2) as u8;
+    Color32::from_rgb(lift(wave.r()), lift(wave.g()), lift(wave.b()))
+}
 const PLAYHEAD: Color32 = Color32::from_rgb(255, 210, 80);
-const SELECTION: Color32 = Color32::from_rgba_premultiplied(60, 90, 140, 70);
+/// Highlight wash: a faint cool white at about 10 % alpha, so the waveform
+/// and spectrogram stay fully legible underneath. Premultiplied because the
+/// constructor has to be const: (170, 200, 240) at alpha 26.
+const SELECTION: Color32 = Color32::from_rgba_premultiplied(17, 20, 24, 26);
+/// Edge lines of the highlight: (200, 225, 255) at alpha 150.
+const SELECTION_EDGE: Color32 = Color32::from_rgba_premultiplied(118, 132, 150, 150);
 const LOOP_EDGE: Color32 = Color32::from_rgb(120, 220, 140);
 const RANGE_EDGE: Color32 = Color32::from_rgb(150, 190, 235);
 const CLIP: Color32 = Color32::from_rgb(255, 70, 70);
@@ -464,7 +474,7 @@ fn draw_range_band(app: &App, p: &egui::Painter, rect: Rect) {
         )
     } else {
         (
-            Color32::from_rgba_unmultiplied(86, 156, 214, 70),
+            Color32::from_rgba_unmultiplied(86, 156, 214, 55),
             RANGE_EDGE,
         )
     };
@@ -558,15 +568,17 @@ fn draw_waveform(app: &App, p: &egui::Painter, rect: Rect, overlay: Option<f32>)
             Some(s) => s != ch,
             None => app.mutes.get(ch).copied().unwrap_or(false),
         };
+        let [wr, wg, wb] = app.settings.wave_color;
+        let wave_c = Color32::from_rgb(wr, wg, wb);
         let fill = tint(if muted {
             Color32::from_gray(70)
         } else {
-            WAVE_FILL
+            wave_c
         });
         let rms_c = tint(if muted {
             Color32::from_gray(110)
         } else {
-            WAVE_RMS
+            rms_color(wave_c)
         });
         let clip_c = tint(CLIP);
         let clip_rms_c = tint(CLIP_RMS);
@@ -802,7 +814,10 @@ fn draw_spectrogram(app: &mut App, ui: &egui::Ui, p: &egui::Painter, rect: Rect)
     };
     let nch = audio.channels.len();
     let ch_h = rect.height() / nch as f32;
-    let lut = app.settings.colormap.lut(app.settings.spec_contrast);
+    let lut = app
+        .settings
+        .colormap
+        .lut_with(app.settings.spec_contrast, &app.settings.custom_stops);
     let merged =
         app.settings.merge_views && app.settings.show_waveform && app.settings.show_spectrogram;
     let spec_tint = if merged {
@@ -845,6 +860,7 @@ fn draw_spectrogram(app: &mut App, ui: &egui::Ui, p: &egui::Painter, rect: Rect)
             size,
             params: params.clone(),
             colormap: app.settings.colormap,
+            custom_stops: app.settings.custom_stops,
             contrast_bits: app.settings.spec_contrast.to_bits(),
             spec_ptr: std::sync::Arc::as_ptr(&spec) as usize,
             detail_ptr: detail
@@ -1047,7 +1063,7 @@ fn draw_overlays(app: &App, p: &egui::Painter, rect: Rect) {
         }
         for x in [x0, x1] {
             if x >= rect.left() && x <= rect.right() {
-                p.vline(x, rect.y_range(), Stroke::new(1.0, Color32::from_gray(200)));
+                p.vline(x, rect.y_range(), Stroke::new(1.0, SELECTION_EDGE));
             }
         }
     }

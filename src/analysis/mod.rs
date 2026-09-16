@@ -8,7 +8,7 @@ pub mod stats;
 pub mod stft;
 pub mod window;
 
-pub use colormap::ColorMap;
+pub use colormap::{ColorMap, CustomStops, DEFAULT_CUSTOM};
 pub use pyramid::{Bin, WaveformPyramid};
 pub use spectrum::LiveSpectrum;
 pub use stats::{ChannelStats, FileStats, compute_stats};

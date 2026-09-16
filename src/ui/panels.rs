@@ -1226,7 +1226,7 @@ pub fn settings_window(app: &mut App, ctx: &egui::Context) {
                 .inner_margin(Margin::same(10)),
         )
         .show(ctx, |ui| {
-            ui.set_width(460.0);
+            ui.set_width(480.0);
             ui.spacing_mut().item_spacing.y = 8.0;
             ui.horizontal(|ui| {
                 ui.label(
@@ -1272,46 +1272,103 @@ pub fn settings_window(app: &mut App, ctx: &egui::Context) {
     }
 }
 
+/// Width of the label column in every settings grid, so controls line up
+/// across cards.
+const LABEL_W: f32 = 156.0;
+const GRID_GAP: f32 = 12.0;
+/// Width of a slider's value box plus its gap, reserved so the slider track
+/// ends at the same x in every row.
+const VALUE_W: f32 = 92.0;
+const COMBO_W: f32 = 150.0;
+
 /// One labelled control row inside a settings grid.
 fn setting(ui: &mut egui::Ui, label: &str, hint: &str, control: impl FnOnce(&mut egui::Ui)) {
-    let l = ui.label(RichText::new(label).small().color(KEY));
+    let l = ui.add(egui::Label::new(RichText::new(label).color(KEY)).truncate());
     if !hint.is_empty() {
         l.on_hover_text(hint);
     }
-    ui.horizontal(|ui| {
-        ui.spacing_mut().slider_width = 200.0;
-        control(ui);
-    });
+    ui.horizontal(|ui| control(ui));
     ui.end_row();
 }
 
 fn settings_grid(ui: &mut egui::Ui, id: &str, rows: impl FnOnce(&mut egui::Ui)) {
+    let slider_w = (ui.available_width() - LABEL_W - GRID_GAP - VALUE_W).max(120.0);
     egui::Grid::new(id)
         .num_columns(2)
-        .min_col_width(118.0)
-        .spacing([12.0, 6.0])
-        .show(ui, rows);
+        .min_col_width(LABEL_W)
+        .spacing([GRID_GAP, 6.0])
+        .show(ui, |ui| {
+            ui.spacing_mut().slider_width = slider_w;
+            rows(ui);
+        });
+}
+
+/// A thin strip showing a colour lookup table from quiet to loud.
+fn palette_strip(ui: &mut egui::Ui, lut: &[Color32]) {
+    let (rect, _) = ui.allocate_exact_size(vec2(96.0, 14.0), Sense::hover());
+    let p = ui.painter();
+    let w = rect.width() / lut.len() as f32;
+    for (i, c) in lut.iter().enumerate() {
+        let r = Rect::from_min_size(
+            pos2(rect.left() + i as f32 * w, rect.top()),
+            vec2(w + 0.6, rect.height()),
+        );
+        p.rect_filled(r, 0.0, *c);
+    }
+    p.rect_stroke(
+        rect,
+        2.0,
+        Stroke::new(1.0, Color32::from_gray(70)),
+        egui::StrokeKind::Outside,
+    );
+}
+
+fn combo(id: &str) -> egui::ComboBox {
+    egui::ComboBox::from_id_salt(id).width(COMBO_W)
 }
 
 fn panes_card(app: &mut App, ui: &mut egui::Ui) {
     card(ui, fonts::icon::LIST, "Panes", None, |ui| {
-        ui.horizontal(|ui| {
-            ui.checkbox(&mut app.settings.show_waveform, "Waveform");
-            ui.checkbox(&mut app.settings.show_spectrogram, "Spectrogram");
-            ui.checkbox(&mut app.settings.show_spectrum, "Spectrum");
-        });
         let both = app.settings.show_waveform && app.settings.show_spectrogram;
-        ui.add_enabled_ui(both, |ui| {
-            ui.checkbox(
-                &mut app.settings.merge_views,
-                "Merge: draw the waveform over the spectrogram",
+        let merged = both && app.settings.merge_views;
+        settings_grid(ui, "panes-grid", |ui| {
+            setting(ui, "Show", "", |ui| {
+                ui.checkbox(&mut app.settings.show_waveform, "Waveform");
+                ui.checkbox(&mut app.settings.show_spectrogram, "Spectrogram");
+                ui.checkbox(&mut app.settings.show_spectrum, "Spectrum");
+            });
+            setting(
+                ui,
+                "Merge",
+                "Draw the waveform over the spectrogram in one pane.",
+                |ui| {
+                    ui.add_enabled_ui(both, |ui| {
+                        ui.checkbox(&mut app.settings.merge_views, "Waveform over spectrogram");
+                    });
+                },
             );
+            // Enabled-state scopes must sit inside the control cell: a scope
+            // around the whole row would swallow the grid's end_row.
+            setting(ui, "Waveform opacity", "", |ui| {
+                ui.add_enabled_ui(merged, |ui| {
+                    ui.add(
+                        egui::Slider::new(&mut app.settings.merge_opacity, 0.05..=1.0)
+                            .fixed_decimals(2),
+                    );
+                });
+            });
+            setting(ui, "Spectrogram opacity", "", |ui| {
+                ui.add_enabled_ui(merged, |ui| {
+                    ui.add(
+                        egui::Slider::new(&mut app.settings.merge_spec_opacity, 0.05..=1.0)
+                            .fixed_decimals(2),
+                    );
+                });
+            });
         });
         if !both && app.settings.merge_views {
             ui.label(
-                RichText::new("Merge needs both the waveform and the spectrogram.")
-                    .small()
-                    .color(KEY),
+                RichText::new("Merge needs both the waveform and the spectrogram.").color(KEY),
             );
         }
         if !app.settings.show_waveform && !app.settings.show_spectrogram {
@@ -1320,27 +1377,9 @@ fn panes_card(app: &mut App, ui: &mut egui::Ui) {
                     "{} Nothing left to draw; turn one back on.",
                     fonts::icon::WARN
                 ))
-                .small()
                 .color(WARN),
             );
         }
-        let merged = both && app.settings.merge_views;
-        ui.add_enabled_ui(merged, |ui| {
-            settings_grid(ui, "merge-grid", |ui| {
-                setting(ui, "Waveform opacity", "", |ui| {
-                    ui.add(egui::Slider::new(
-                        &mut app.settings.merge_opacity,
-                        0.05..=1.0,
-                    ));
-                });
-                setting(ui, "Spectrogram opacity", "", |ui| {
-                    ui.add(egui::Slider::new(
-                        &mut app.settings.merge_spec_opacity,
-                        0.05..=1.0,
-                    ));
-                });
-            });
-        });
     });
 }
 
@@ -1353,7 +1392,7 @@ fn spectrogram_card(app: &mut App, ui: &mut egui::Ui) {
                 "Window size",
                 "Samples per FFT. Larger: finer frequency, coarser time.",
                 |ui| {
-                    egui::ComboBox::from_id_salt("win-size")
+                    combo("win-size")
                         .selected_text(stft.window_size.to_string())
                         .show_ui(ui, |ui| {
                             for s in StftParams::SIZES {
@@ -1367,13 +1406,12 @@ fn spectrogram_card(app: &mut App, ui: &mut egui::Ui) {
                             sr / stft.window_size as f64,
                             stft.window_size as f64 / sr * 1000.0
                         ))
-                        .small()
                         .color(KEY),
                     );
                 },
             );
             setting(ui, "Overlap", "", |ui| {
-                egui::ComboBox::from_id_salt("overlap")
+                combo("overlap")
                     .selected_text(stft.overlap_label())
                     .show_ui(ui, |ui| {
                         for (n, d) in [(0u8, 1u8), (1, 2), (3, 4), (7, 8)] {
@@ -1387,7 +1425,7 @@ fn spectrogram_card(app: &mut App, ui: &mut egui::Ui) {
                     });
             });
             setting(ui, "Window", "", |ui| {
-                egui::ComboBox::from_id_salt("win-kind")
+                combo("win-kind")
                     .selected_text(stft.window.name())
                     .show_ui(ui, |ui| {
                         for w in WindowKind::ALL {
@@ -1412,14 +1450,35 @@ fn spectrogram_card(app: &mut App, ui: &mut egui::Ui) {
         ui.add_space(4.0);
         settings_grid(ui, "spec-grid", |ui| {
             setting(ui, "Colour map", "", |ui| {
-                egui::ComboBox::from_id_salt("cmap")
+                combo("cmap")
                     .selected_text(app.settings.colormap.name())
                     .show_ui(ui, |ui| {
                         for c in ColorMap::ALL {
                             ui.selectable_value(&mut app.settings.colormap, c, c.name());
                         }
                     });
+                let lut = app
+                    .settings
+                    .colormap
+                    .lut_with(app.settings.spec_contrast, &app.settings.custom_stops);
+                palette_strip(ui, &lut);
             });
+            if app.settings.colormap == ColorMap::Custom {
+                setting(
+                    ui,
+                    "Custom colours",
+                    "Quiet, medium and loud. Black below the quiet colour.",
+                    |ui| {
+                        for (i, label) in ["quiet", "medium", "loud"].iter().enumerate() {
+                            ui.color_edit_button_srgb(&mut app.settings.custom_stops[i])
+                                .on_hover_text(*label);
+                        }
+                        if ui.button("Reset").clicked() {
+                            app.settings.custom_stops = auriscope::analysis::DEFAULT_CUSTOM;
+                        }
+                    },
+                );
+            }
             setting(
                 ui,
                 "Contrast",
@@ -1427,6 +1486,7 @@ fn spectrogram_card(app: &mut App, ui: &mut egui::Ui) {
                 |ui| {
                     ui.add(
                         egui::Slider::new(&mut app.settings.spec_contrast, 0.4..=2.5)
+                            .fixed_decimals(2)
                             .logarithmic(true),
                     );
                 },
@@ -1435,14 +1495,22 @@ fn spectrogram_card(app: &mut App, ui: &mut egui::Ui) {
                 ui.checkbox(&mut app.settings.log_frequency, "Logarithmic");
             });
             setting(ui, "Floor", "Level drawn as the darkest colour.", |ui| {
-                ui.add(egui::Slider::new(&mut app.settings.db_min, -140.0..=-20.0).suffix(" dB"));
+                ui.add(
+                    egui::Slider::new(&mut app.settings.db_min, -140.0..=-20.0)
+                        .fixed_decimals(0)
+                        .suffix(" dB"),
+                );
             });
             setting(
                 ui,
                 "Ceiling",
                 "Level drawn as the brightest colour.",
                 |ui| {
-                    ui.add(egui::Slider::new(&mut app.settings.db_max, -60.0..=0.0).suffix(" dB"));
+                    ui.add(
+                        egui::Slider::new(&mut app.settings.db_max, -60.0..=0.0)
+                            .fixed_decimals(0)
+                            .suffix(" dB"),
+                    );
                 },
             );
             if app.settings.db_max <= app.settings.db_min + 6.0 {
@@ -1455,6 +1523,7 @@ fn spectrogram_card(app: &mut App, ui: &mut egui::Ui) {
                 |ui| {
                     ui.add(
                         egui::Slider::new(&mut app.settings.min_hz, 10.0..=200.0)
+                            .fixed_decimals(0)
                             .suffix(" Hz")
                             .logarithmic(true),
                     );
@@ -1466,20 +1535,55 @@ fn spectrogram_card(app: &mut App, ui: &mut egui::Ui) {
 
 fn waveform_card(app: &mut App, ui: &mut egui::Ui) {
     card(ui, fonts::icon::GAUGE, "Waveform", None, |ui| {
-        ui.horizontal(|ui| {
-            ui.checkbox(&mut app.settings.show_rms, "RMS overlay");
-            ui.checkbox(&mut app.settings.show_db_scale, "dB scale");
-        });
         let merged =
             app.settings.merge_views && app.settings.show_waveform && app.settings.show_spectrogram;
         settings_grid(ui, "wave-grid", |ui| {
+            setting(ui, "Overlays", "", |ui| {
+                ui.checkbox(&mut app.settings.show_rms, "RMS");
+                ui.checkbox(&mut app.settings.show_db_scale, "dB scale");
+            });
+            setting(
+                ui,
+                "Colour",
+                "Waveform colour. The RMS overlay is a lighter tint of it.",
+                |ui| {
+                    ui.color_edit_button_srgb(&mut app.settings.wave_color);
+                    const SWATCHES: [([u8; 3], &str); 5] = [
+                        (super::DEFAULT_WAVE_COLOR, "Blue"),
+                        ([235, 235, 235], "White"),
+                        ([120, 220, 140], "Green"),
+                        ([247, 198, 72], "Amber"),
+                        ([230, 120, 200], "Pink"),
+                    ];
+                    for (rgb, name) in SWATCHES {
+                        let c = Color32::from_rgb(rgb[0], rgb[1], rgb[2]);
+                        let (rect, resp) = ui.allocate_exact_size(vec2(16.0, 16.0), Sense::click());
+                        ui.painter().rect_filled(rect, 3.0, c);
+                        if app.settings.wave_color == rgb {
+                            ui.painter().rect_stroke(
+                                rect,
+                                3.0,
+                                Stroke::new(1.5, Color32::WHITE),
+                                egui::StrokeKind::Outside,
+                            );
+                        }
+                        if resp.on_hover_text(name).clicked() {
+                            app.settings.wave_color = rgb;
+                        }
+                    }
+                },
+            );
             setting(
                 ui,
                 "Vertical zoom",
                 "Alt+Shift+wheel over the waveform does the same.",
                 |ui| {
+                    // Leave room for the reset button so the track still ends
+                    // where the other sliders do.
+                    ui.spacing_mut().slider_width -= 34.0;
                     ui.add(
                         egui::Slider::new(&mut app.settings.wave_v_zoom, V_ZOOM_MIN..=V_ZOOM_MAX)
+                            .fixed_decimals(2)
                             .logarithmic(true)
                             .suffix("x"),
                     );
@@ -1494,10 +1598,10 @@ fn waveform_card(app: &mut App, ui: &mut egui::Ui) {
                 "Share of the pane given to the waveform. Not used while merged.",
                 |ui| {
                     ui.add_enabled_ui(!merged, |ui| {
-                        ui.add(egui::Slider::new(
-                            &mut app.settings.waveform_fraction,
-                            0.05..=0.95,
-                        ));
+                        ui.add(
+                            egui::Slider::new(&mut app.settings.waveform_fraction, 0.05..=0.95)
+                                .fixed_decimals(2),
+                        );
                     });
                 },
             );
@@ -1510,7 +1614,7 @@ fn spectrum_card(app: &mut App, ui: &mut egui::Ui) {
         let mut size = app.settings.spectrum_size;
         settings_grid(ui, "spectrum-grid", |ui| {
             setting(ui, "FFT size", "", |ui| {
-                egui::ComboBox::from_id_salt("spectrum-size")
+                combo("spectrum-size")
                     .selected_text(size.to_string())
                     .show_ui(ui, |ui| {
                         for s in [1024usize, 2048, 4096, 8192, 16384] {
@@ -1523,10 +1627,10 @@ fn spectrum_card(app: &mut App, ui: &mut egui::Ui) {
                 "Averaging",
                 "How much of the previous frame is kept.",
                 |ui| {
-                    ui.add(egui::Slider::new(
-                        &mut app.settings.spectrum_averaging,
-                        0.0..=0.95,
-                    ));
+                    ui.add(
+                        egui::Slider::new(&mut app.settings.spectrum_averaging, 0.0..=0.95)
+                            .fixed_decimals(2),
+                    );
                 },
             );
         });
@@ -1559,14 +1663,19 @@ fn keys_card(ui: &mut egui::Ui) {
             ("Middle-drag", "scroll the clip"),
             ("Divider", "drag to resize the strips"),
         ];
+        let desc_w = (ui.available_width() - LABEL_W - GRID_GAP).max(120.0);
         egui::Grid::new("keys-grid")
             .num_columns(2)
-            .spacing([12.0, 3.0])
+            .min_col_width(LABEL_W)
+            .spacing([GRID_GAP, 4.0])
             .striped(true)
             .show(ui, |ui| {
                 for (k, v) in KEYS {
-                    ui.label(mono(k).size(fonts::SMALL));
-                    ui.label(RichText::new(v).small().color(VAL));
+                    ui.label(RichText::new(k).monospace().color(VAL));
+                    ui.horizontal(|ui| {
+                        ui.set_min_width(desc_w);
+                        ui.label(RichText::new(v).color(KEY));
+                    });
                     ui.end_row();
                 }
             });
