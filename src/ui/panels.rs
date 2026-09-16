@@ -12,7 +12,10 @@ use super::fonts;
 use super::help::{self, Topic};
 use super::icon;
 use super::update;
-use super::util::{fmt_time, fmt_time_field, reveal};
+use super::util::{
+    db_str, fmt_bytes, fmt_hz_unit, fmt_int, fmt_ms, fmt_system_time, fmt_time, fmt_time_field,
+    lufs_str, reveal, short_codec,
+};
 use super::views::{V_ZOOM_MAX, V_ZOOM_MIN, channel_name};
 use super::{App, RECENT_MAX};
 
@@ -1182,86 +1185,6 @@ fn mono(text: impl Into<String>) -> RichText {
     RichText::new(text.into()).monospace().color(VAL)
 }
 
-fn fmt_int(n: u64) -> String {
-    let s = n.to_string();
-    let mut out = String::with_capacity(s.len() + s.len() / 3);
-    for (i, c) in s.chars().enumerate() {
-        if i > 0 && (s.len() - i).is_multiple_of(3) {
-            out.push(',');
-        }
-        out.push(c);
-    }
-    out
-}
-
-fn fmt_bytes(n: u64) -> String {
-    const UNITS: [&str; 5] = ["B", "kB", "MB", "GB", "TB"];
-    let mut v = n as f64;
-    let mut u = 0;
-    while v >= 1000.0 && u < UNITS.len() - 1 {
-        v /= 1000.0;
-        u += 1;
-    }
-    if u == 0 {
-        format!("{n} B")
-    } else {
-        format!("{v:.1} {}", UNITS[u])
-    }
-}
-
-/// UTC date and time without pulling in a calendar crate.
-fn fmt_system_time(t: std::time::SystemTime) -> String {
-    let secs = t
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |d| d.as_secs());
-    let days = (secs / 86_400) as i64;
-    let rem = secs % 86_400;
-    // Howard Hinnant's civil-from-days.
-    let z = days + 719_468;
-    let era = z.div_euclid(146_097);
-    let doe = z.rem_euclid(146_097);
-    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
-    let y = yoe + era * 400;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let d = doy - (153 * mp + 2) / 5 + 1;
-    let m = if mp < 10 { mp + 3 } else { mp - 9 };
-    let y = if m <= 2 { y + 1 } else { y };
-    format!(
-        "{y:04}-{m:02}-{d:02} {:02}:{:02} UTC",
-        rem / 3600,
-        (rem % 3600) / 60
-    )
-}
-
-/// Symphonia's long codec names, trimmed to fit a sidebar row.
-fn short_codec(name: &str) -> String {
-    name.replace("Little-Endian", "LE")
-        .replace("Big-Endian", "BE")
-        .replace(" Interleaved", "")
-        .replace(" Planar", "")
-        .replace("Signed ", "s")
-        .replace("Unsigned ", "u")
-        .replace("Floating Point ", "f")
-        .replace("-bit", "")
-}
-
-fn db_str(v: f32) -> String {
-    if v.is_finite() {
-        format!("{v:+.1} dB")
-    } else {
-        "—".into()
-    }
-}
-
-fn lufs_str(v: f32) -> String {
-    if v.is_finite() {
-        format!("{v:+.1} LUFS")
-    } else {
-        "—".into()
-    }
-}
-
 /// Horizontal level bar on a −60…0 dB scale with a value readout. `dim` is
 /// for a channel that is not being heard: bar, label and number all go grey.
 fn level_bar(ui: &mut egui::Ui, label: &str, db: f32, color: Color32, topic: Topic, dim: bool) {
@@ -2165,24 +2088,6 @@ fn palette_strip(ui: &mut egui::Ui, lut: &[Color32]) {
     );
 }
 
-/// Readouts for the STFT resolution line: enough digits to tell two settings
-/// apart, no more.
-fn fmt_hz(hz: f64) -> String {
-    if hz >= 100.0 {
-        format!("{hz:.0} Hz")
-    } else {
-        format!("{hz:.1} Hz")
-    }
-}
-
-fn fmt_ms(ms: f64) -> String {
-    if ms >= 100.0 {
-        format!("{ms:.0} ms")
-    } else {
-        format!("{ms:.1} ms")
-    }
-}
-
 fn combo(id: &str) -> egui::ComboBox {
     egui::ComboBox::from_id_salt(id).width(COMBO_W)
 }
@@ -2299,7 +2204,7 @@ fn spectrogram_card(app: &mut App, ui: &mut egui::Ui) {
                 setting(ui, "Resolution", Some(Topic::Resolution), |ui| {
                     ui.label(mono(format!(
                         "bin {} · frame {} · hop {}",
-                        fmt_hz(sr / stft.window_size as f64),
+                        fmt_hz_unit(sr / stft.window_size as f64),
                         fmt_ms(stft.window_size as f64 / sr * 1000.0),
                         fmt_ms(stft.hop() as f64 / sr * 1000.0),
                     )));

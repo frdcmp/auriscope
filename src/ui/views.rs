@@ -13,7 +13,7 @@ use auriscope::analysis::stats::CLIP_THRESHOLD;
 use auriscope::analysis::{ViewParams, render_view};
 
 use super::fonts;
-use super::util::{fmt_hz, fmt_time_field, fmt_time_step, nice_time_step};
+use super::util::{fmt_hz, fmt_hz_full, fmt_time_field, fmt_time_step, nice_time_step};
 use super::{App, View};
 
 /// A spectrogram image being rendered on a worker thread.
@@ -1128,14 +1128,6 @@ fn spectrogram_hover(app: &mut App, pos: Pos2, rect: Rect) {
         fmt_hz_full(hz),
         channel_label(ch, nch)
     );
-}
-
-fn fmt_hz_full(hz: f32) -> String {
-    if hz >= 1000.0 {
-        format!("{:.2} kHz", hz / 1000.0)
-    } else {
-        format!("{hz:.1} Hz")
-    }
 }
 
 // ---- overlays --------------------------------------------------------------
