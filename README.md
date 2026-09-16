@@ -159,7 +159,7 @@ Rust throughout. The choices are deliberate; the reasoning matters more than the
 | ✅ | **M2 — it draws** | Waveform from the peak/RMS pyramid, clip highlighting, click-to-seek, drag-to-select, wheel pan, pinch and ctrl-wheel zoom, playhead following, drag-and-drop and CLI open. |
 | ✅ | **M3 — it analyses** | Offline per-channel spectrogram with max-pooled zoom levels, linear and log frequency axes, hover readout, realtime spectrum with averaging and peak hold, window/overlap/function controls, dB floor and ceiling, perceptual colour maps. |
 | ✅ | **M4 — it measures** | Integrated, short-term and momentary LUFS, loudness range, sample and true peak, clipped sample and run counts, DC offset, RMS, stereo correlation, metadata and tag panel, loop regions, keyboard navigation, persisted settings. *Not yet:* A/B markers. |
-| ⬜ | **M5 — it ships** | Flathub as `io.github.frdcmp.Auriscope`, AUR, and an MSI or portable `.exe` for Windows via `cargo-dist`. |
+| 🔶 | **M5 — it ships** | GitHub releases with Linux and Windows archives ✅, in-app new-version notice for those archives ✅, Flathub as `io.github.frdcmp.Auriscope` (submitted), AUR (packaged, not yet published), a winget manifest so Windows updates through `winget upgrade`, and an icon resource on the `.exe`. |
 
 ### Known gaps
 
@@ -299,7 +299,8 @@ AURISCOPE_SCREENSHOT=shot.ppm cargo run -- file.wav
 AURISCOPE_SCREENSHOT=shot.ppm AURISCOPE_SCREENSHOT_ZOOM=1.00,1.06 \
   cargo run -- file.wav
 
-# Open with the settings dialog up, or with a looped range on the ruler.
+# Open with the settings dialog up (`=end` scrolls it to the last card), or
+# with a looped range on the ruler.
 AURISCOPE_SCREENSHOT=shot.ppm AURISCOPE_SCREENSHOT_SETTINGS=1 cargo run -- file.wav
 AURISCOPE_SCREENSHOT=shot.ppm AURISCOPE_SCREENSHOT_RANGE=0.4,0.9 cargo run -- file.wav
 ```
@@ -317,7 +318,11 @@ AURISCOPE_THREADS=1 cargo run --release --example bench_spec -- file.wav   # for
 
 ## 📦 Packaging
 
-Everything a distribution needs lives in the repo: the desktop entry and AppStream metainfo in `assets/`, and the recipes under `packaging/`. All of them build from a version tag, so **tag first** (`git tag v0.1.0 && git push --tags`); the release workflow then attaches Linux and Windows archives to the GitHub release.
+Everything a distribution needs lives in the repo: the desktop entry and AppStream metainfo in `assets/`, and the recipes under `packaging/`. All of them build from a version tag, so **tag first** (`git tag v0.1.0 && git push --tags`); the release workflow then attaches Linux and Windows archives to the GitHub release. The full step-by-step, from version bump to Flathub and AUR, is in [RELEASING.md](RELEASING.md).
+
+### Update check
+
+Builds with the `update-check` feature (on by default; the GitHub release archives have it) ask `api.github.com` for the latest release at startup, at most once a day, and show a small *"0.2.0 available"* button in the transport bar that opens the release page. Nothing is downloaded and nothing about the machine is sent beyond an ordinary HTTPS request; the check can be turned off in Settings → About, and a version can be skipped. Flatpak and AUR builds are compiled without it (`--no-default-features`) because their package manager is the update channel and Flathub does not allow apps to check on their own.
 
 ### Flatpak / Flathub
 
@@ -327,7 +332,7 @@ Everything a distribution needs lives in the repo: the desktop entry and AppStre
 python3 packaging/flatpak/gen-cargo-sources.py Cargo.lock -o packaging/flatpak/cargo-sources.json
 ```
 
-The Flatpak build uses `--features portal`, which routes the Open dialog through the XDG file-chooser portal instead of GTK, so the sandbox needs no filesystem permission: `--socket=wayland`, `--socket=fallback-x11`, `--device=dri` for wgpu and `--socket=pulseaudio` for cpal are the whole list. Build and try it locally:
+The Flatpak build uses `--no-default-features --features portal`, which routes the Open dialog through the XDG file-chooser portal instead of GTK, so the sandbox needs no filesystem permission, and leaves out the update check: `--socket=wayland`, `--socket=fallback-x11`, `--device=dri` for wgpu and `--socket=pulseaudio` for cpal are the whole list. Build and try it locally:
 
 ```bash
 flatpak install flathub org.freedesktop.Sdk//25.08 org.freedesktop.Sdk.Extension.rust-stable//25.08
@@ -349,7 +354,7 @@ Publishing the release package to the AUR: `updpkgsums`, `makepkg --printsrcinfo
 
 ### Windows
 
-`#![windows_subsystem = "windows"]` hides the console and the release workflow ships a zip. Still missing: an icon resource and file associations for double-click open.
+`#![windows_subsystem = "windows"]` hides the console and the release workflow ships a zip. The window and taskbar icon are set at runtime from the embedded icon; still missing: an icon resource on the `.exe` itself, file associations for double-click open, and a winget manifest so `winget upgrade` can replace the in-app update notice.
 
 ---
 

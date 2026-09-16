@@ -37,14 +37,23 @@ anyhow = "1.0"
 log = "0.4"
 env_logger = "0.11"
 serde = { version = "1.0", features = ["derive"] }
+# Update check (the `update-check` feature): one GET to the GitHub releases
+# API at startup, at most once a day. rustls with bundled roots, so it works
+# the same on a bare Windows box as on Linux.
+ureq = { version = "3.4", optional = true, default-features = false, features = ["rustls"] }
+semver = { version = "1.0", optional = true }
+
+[features]
+default = ["gtk", "update-check"]
+gtk = ["rfd/gtk3"]
+portal = ["rfd/xdg-portal", "rfd/pollster"]
+# Tell the user when a newer release is on GitHub. For the archives on the
+# release page; Flatpak and distribution packages build without it, since
+# their package manager already does this.
+update-check = ["dep:ureq", "dep:semver"]
 
 # Dependencies at full optimisation even in debug builds. This is what makes
 # `cargo run` usable: FFT, decoding and resampling live in dependencies.
-[features]
-default = ["gtk"]
-gtk = ["rfd/gtk3"]
-portal = ["rfd/xdg-portal", "rfd/pollster"]
-
 [profile.dev.package."*"]
 opt-level = 3
 

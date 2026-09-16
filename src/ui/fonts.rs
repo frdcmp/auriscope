@@ -34,6 +34,7 @@ pub mod icon {
     pub const MARKER: &str = "\u{f0c5}";
     pub const WARN: &str = "\u{f071}";
     pub const INFO: &str = "\u{f05a}";
+    pub const DOWNLOAD: &str = "\u{f019}";
 }
 
 /// Sizes of the type scale, in points.

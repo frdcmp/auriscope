@@ -10,6 +10,8 @@ use auriscope::analysis::{ColorMap, StftParams, WindowKind, db_to_amp};
 
 use super::App;
 use super::fonts;
+use super::icon;
+use super::update;
 use super::util::fmt_time;
 use super::views::{V_ZOOM_MAX, V_ZOOM_MIN, channel_label};
 
@@ -135,8 +137,18 @@ pub fn title_bar(app: &mut App, root: &mut egui::Ui) {
             if drag.double_clicked() {
                 ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(!maximized));
             }
+            let icon_rect = Rect::from_center_size(
+                pos2(full.left() + 8.0 + icon::TITLE_SIZE / 2.0, full.center().y),
+                vec2(icon::TITLE_SIZE, icon::TITLE_SIZE),
+            );
+            ui.painter().image(
+                app.icon.id(),
+                icon_rect,
+                Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)),
+                Color32::WHITE,
+            );
             ui.painter().text(
-                pos2(full.left() + 8.0, full.center().y),
+                pos2(icon_rect.right() + 8.0, full.center().y),
                 egui::Align2::LEFT_CENTER,
                 &app.title,
                 egui::FontId::proportional(fonts::BODY),
@@ -332,9 +344,46 @@ pub fn top_bar(app: &mut App, root: &mut egui::Ui) {
                 }
                 ui.separator();
                 ui.checkbox(&mut app.settings.follow_playhead, "Follow");
+                update_notice(app, ui);
             });
         });
     });
+}
+
+/// "0.2.0 available" in the transport bar, with a skip button. Shown only
+/// while a newer release is known and the user has not dismissed it.
+fn update_notice(app: &mut App, ui: &mut egui::Ui) {
+    let Some(release) = app
+        .updater
+        .notice(app.settings.update_skipped.as_deref())
+        .cloned()
+    else {
+        return;
+    };
+    ui.separator();
+    let skip = ui
+        .add(egui::Button::new(RichText::new("×").color(KEY)).frame(false))
+        .on_hover_text("Skip this version");
+    let open = ui
+        .add(egui::Button::new(
+            RichText::new(format!(
+                "{} {} available",
+                fonts::icon::DOWNLOAD,
+                release.version
+            ))
+            .color(ACCENT),
+        ))
+        .on_hover_text(format!(
+            "Auriscope {} is out; you have {}.\nOpens the release page.",
+            release.version,
+            update::CURRENT
+        ));
+    if open.clicked() {
+        ui.ctx().open_url(egui::OpenUrl::new_tab(&release.url));
+    }
+    if skip.clicked() {
+        app.settings.update_skipped = Some(release.version);
+    }
 }
 
 /// A sliders glyph for the settings button: three tracks with a knob each,
@@ -1255,7 +1304,10 @@ pub fn settings_window(app: &mut App, ctx: &egui::Context) {
                 .auto_shrink([false, true]);
             if app.settings_content_h == 0.0 {
                 // Freshly opened: start at the top whatever egui remembers.
-                area = area.vertical_scroll_offset(0.0);
+                // The screenshot hook asks for the bottom instead; egui clamps
+                // the offset to the content once it has measured it.
+                let offset = if app.settings_scroll_end { 1e5 } else { 0.0 };
+                area = area.vertical_scroll_offset(offset);
             }
             let out = area.show(ui, |ui| {
                 ui.spacing_mut().item_spacing.y = 8.0;
@@ -1264,6 +1316,7 @@ pub fn settings_window(app: &mut App, ctx: &egui::Context) {
                 waveform_card(app, ui);
                 spectrum_card(app, ui);
                 keys_card(ui);
+                about_card(app, ui);
             });
             app.settings_content_h = out.content_size.y;
         });
@@ -1679,5 +1732,83 @@ fn keys_card(ui: &mut egui::Ui) {
                     ui.end_row();
                 }
             });
+    });
+}
+
+fn about_card(app: &mut App, ui: &mut egui::Ui) {
+    card(ui, fonts::icon::TAG, "About", None, |ui| {
+        kv_grid(ui, "about-grid", |ui| {
+            kv(ui, "Version", update::CURRENT);
+            ui.label(RichText::new("Source").small().color(KEY));
+            ui.hyperlink_to(
+                RichText::new("github.com/frdcmp/auriscope").monospace(),
+                update::REPO_URL,
+            );
+            ui.end_row();
+        });
+        ui.add_space(4.0);
+        if !update::ENABLED {
+            ui.label(
+                RichText::new("Updates come through your package manager.")
+                    .small()
+                    .color(KEY),
+            );
+            return;
+        }
+        ui.horizontal(|ui| {
+            ui.checkbox(
+                &mut app.settings.check_updates,
+                "Check for updates on startup",
+            )
+            .on_hover_text(
+                "Asks api.github.com for the latest release, at most once a day. \
+                     Nothing is downloaded and nothing about you is sent.",
+            );
+            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                let checking = app.updater.status == update::Status::Checking;
+                if ui
+                    .add_enabled(!checking, egui::Button::new("Check now"))
+                    .clicked()
+                {
+                    app.updater.start();
+                }
+            });
+        });
+        ui.horizontal(|ui| match &app.updater.status {
+            update::Status::Idle => {
+                ui.label(RichText::new("Not checked yet.").small().color(KEY));
+            }
+            update::Status::Checking => {
+                ui.spinner();
+                ui.label(RichText::new("Checking…").small().color(KEY));
+            }
+            update::Status::UpToDate => {
+                ui.label(RichText::new("Up to date.").small().color(GOOD));
+            }
+            update::Status::Newer(r) => {
+                let r = r.clone();
+                ui.label(
+                    RichText::new(format!("{} available.", r.version))
+                        .small()
+                        .color(ACCENT),
+                );
+                ui.hyperlink_to(RichText::new("Release page").small(), &r.url);
+                let skipped = app.settings.update_skipped.as_deref() == Some(r.version.as_str());
+                let label = if skipped { "Remind me" } else { "Skip" };
+                if ui.small_button(label).clicked() {
+                    app.settings.update_skipped = (!skipped).then(|| r.version.clone());
+                }
+            }
+            update::Status::Failed(e) => {
+                ui.label(
+                    RichText::new(format!("Check failed: {e}"))
+                        .small()
+                        .color(KEY),
+                )
+                .on_hover_text(
+                    "Offline, or GitHub declined the request. Nothing else is affected.",
+                );
+            }
+        });
     });
 }

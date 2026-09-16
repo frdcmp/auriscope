@@ -37,7 +37,8 @@ build() {
   cd auriscope
   export RUSTUP_TOOLCHAIN=stable
   export CARGO_TARGET_DIR=target
-  cargo build --frozen --release
+  # No in-app update check: pacman is the update channel.
+  cargo build --frozen --release --no-default-features --features gtk
 }
 
 check() {

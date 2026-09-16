@@ -45,6 +45,8 @@ modules:
     buildsystem: simple
     build-commands:
       - cargo --offline fetch --manifest-path Cargo.toml --verbose
+      # `portal` for the file dialog; no `update-check`, Flathub is the
+      # update channel and forbids apps checking on their own.
       - cargo --offline build --release --no-default-features --features portal
       - install -Dm755 target/release/auriscope /app/bin/auriscope
       - install -Dm644 assets/io.github.frdcmp.Auriscope.desktop

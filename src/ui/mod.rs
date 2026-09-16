@@ -2,8 +2,10 @@
 //! atomics from the engine, cached analysis results, and the live tap.
 
 pub mod fonts;
+pub mod icon;
 mod panels;
 mod spectrum;
+pub mod update;
 mod util;
 mod views;
 
@@ -62,6 +64,12 @@ pub struct Settings {
     pub follow_playhead: bool,
     pub show_rms: bool,
     pub last_file: Option<PathBuf>,
+    /// Look for a newer release on GitHub at startup (`update-check` builds).
+    pub check_updates: bool,
+    /// When the last automatic check ran, in seconds since the Unix epoch.
+    pub update_last_check: u64,
+    /// A release the user chose not to be reminded of.
+    pub update_skipped: Option<String>,
 }
 
 impl Default for Settings {
@@ -92,6 +100,9 @@ impl Default for Settings {
             follow_playhead: true,
             show_rms: true,
             last_file: None,
+            check_updates: true,
+            update_last_check: 0,
+            update_skipped: None,
         }
     }
 }
@@ -205,6 +216,8 @@ pub struct App {
     /// can claim that much: inside a modal the reported available height is
     /// not the screen's.
     settings_content_h: f32,
+    /// Dev hook: keep the settings dialog scrolled to the bottom.
+    settings_scroll_end: bool,
     /// For debouncing detail-tile requests while the view is still moving.
     last_view: View,
     view_changed_at: Instant,
@@ -212,6 +225,9 @@ pub struct App {
     middle_panning: bool,
     /// Window title shown by our custom title bar.
     title: String,
+    /// The app icon beside it.
+    icon: TextureHandle,
+    pub updater: update::Updater,
     last_tick: Instant,
     pending_open: Option<PathBuf>,
     /// Dev hook: `AURISCOPE_SCREENSHOT=out.ppm` writes one frame after the
@@ -231,6 +247,13 @@ impl App {
         cc.egui_ctx.set_theme(egui::ThemePreference::Dark);
         fonts::install(&cc.egui_ctx);
         let pending_open = initial.or_else(|| settings.last_file.clone());
+        let mut updater = update::Updater::default();
+        if update::ENABLED
+            && settings.check_updates
+            && update::Updater::due(settings.update_last_check)
+        {
+            updater.start();
+        }
         Self {
             settings,
             audio: None,
@@ -262,6 +285,7 @@ impl App {
             hover_info: String::new(),
             settings_open: false,
             settings_content_h: 0.0,
+            settings_scroll_end: false,
             last_view: View {
                 start: 0.0,
                 end: 1.0,
@@ -269,6 +293,8 @@ impl App {
             view_changed_at: Instant::now(),
             middle_panning: false,
             title: "Auriscope".into(),
+            icon: icon::title_texture(&cc.egui_ctx),
+            updater,
             last_tick: Instant::now(),
             pending_open,
             screenshot: std::env::var_os("AURISCOPE_SCREENSHOT").map(|p| (PathBuf::from(p), None)),
@@ -790,6 +816,9 @@ impl App {
                     });
                 if std::env::var_os("AURISCOPE_SCREENSHOT_SETTINGS").is_some() {
                     self.settings_open = true;
+                    // `=end` scrolls the dialog to its last card.
+                    self.settings_scroll_end =
+                        std::env::var("AURISCOPE_SCREENSHOT_SETTINGS").is_ok_and(|v| v == "end");
                 }
                 // An optional looped range in seconds, to show the ruler band.
                 if let Some((a, b)) =
@@ -869,6 +898,9 @@ impl eframe::App for App {
         }
         self.poll_job(ctx);
         self.poll_detail();
+        if self.updater.poll() {
+            self.settings.update_last_check = update::unix_now();
+        }
         self.handle_drops(ctx);
         self.handle_shortcuts(ctx);
         self.tick_live();
