@@ -77,6 +77,11 @@
   <content_rating type="oars-1.1" />
 
   <releases>
+    <release version="0.1.3" date="2026-09-17">
+      <description>
+        <p>Capture what you are looking at: save the current view as a PNG, and its measurements alongside as JSON, so a finding can leave the app and go into a report or a ticket.</p>
+      </description>
+    </release>
     <release version="0.1.2" date="2026-09-17">
       <description>
         <p>A recently opened list, so returning to a file you were working on no longer means finding it again.</p>
