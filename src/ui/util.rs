@@ -142,6 +142,13 @@ fn file_uri(path: &Path) -> String {
     uri
 }
 
+/// A file's name for a one-line row, falling back to the whole path for the
+/// odd path that has no final component.
+pub fn file_label(path: &Path) -> String {
+    path.file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| path.display().to_string())
+}
 
 // ---- readouts --------------------------------------------------------------
 
