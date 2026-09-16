@@ -35,6 +35,7 @@ pub mod icon {
     pub const WARN: &str = "\u{f071}";
     pub const INFO: &str = "\u{f05a}";
     pub const DOWNLOAD: &str = "\u{f019}";
+    pub const MAGNIFIER: &str = "\u{f002}";
 }
 
 /// Sizes of the type scale, in points.
@@ -42,7 +43,8 @@ pub const SMALL: f32 = 10.5;
 pub const BODY: f32 = 12.5;
 pub const MONO_SIZE: f32 = 12.0;
 pub const HEADING: f32 = 14.0;
-/// Rulers and axis labels: monospace, one step under the small style.
+/// Rulers and the scales down the sides of the views: monospace, one step
+/// under the small style.
 pub const RULER: f32 = 10.0;
 
 pub fn install(ctx: &egui::Context) {

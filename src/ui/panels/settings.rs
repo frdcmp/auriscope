@@ -615,11 +615,15 @@ fn files_card(app: &mut App, ui: &mut egui::Ui) {
 
 fn keys_card(ui: &mut egui::Ui) {
     wide_card(ui, fonts::icon::INFO, "Keys", Topic::KeysCard, None, |ui| {
-        const KEYS: [(&str, &str); 18] = [
+        const KEYS: [(&str, &str); 20] = [
             ("Space", "play / pause"),
             ("Ctrl+O", "open a file"),
             ("Ctrl+,", "settings"),
             ("F1", "help mode: hover a label to read what it means"),
+            (
+                "Ctrl+Shift+S",
+                "save the views as a PNG, with a JSON beside it",
+            ),
             ("Click", "seek, clear the highlight"),
             ("Drag", "select; the range stays on the ruler"),
             ("Ruler handles", "drag to adjust the range"),
@@ -628,6 +632,7 @@ fn keys_card(ui: &mut egui::Ui) {
             ("Esc", "clear highlight, then range"),
             ("F / Shift+F", "zoom to range / fit file"),
             ("+ / −", "zoom in / out"),
+            ("Ctrl+= / Ctrl+−", "interface scale · Ctrl+0 resets to 100%"),
             ("← → / Shift", "±5 s / ±1 s · Home, End"),
             ("Wheel", "zoom at pointer · Shift: pan"),
             ("Ctrl+wheel, pinch", "zoom in / out"),

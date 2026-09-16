@@ -4,12 +4,12 @@
 use eframe::egui;
 use egui::{Color32, Margin, RichText};
 
-use crate::ui::help::Topic;
+use crate::ui::help::{self, Topic};
 use crate::ui::{App, fonts};
 
 use super::file_cards::{bwf_card, file_card, header_card, markers_card, tags_card};
 use super::meter_cards::{analysis_card, cursor_card, levels_card, loudness_card};
-use super::theme::{KEY, SIDE_BG};
+use super::theme::{ACCENT, KEY, SIDE_BG};
 use super::widgets::card;
 
 pub fn status_bar(app: &mut App, root: &mut egui::Ui) {
@@ -25,6 +25,12 @@ pub fn status_bar(app: &mut App, root: &mut egui::Ui) {
             }
             if let Some(err) = &app.error {
                 ui.colored_label(Color32::from_rgb(255, 110, 110), err);
+                ui.separator();
+            }
+            // A capture landing, and anything else worth one line. Clears
+            // itself after a few seconds, so the bar goes back to the device.
+            if let Some(note) = app.notice() {
+                ui.colored_label(ACCENT, note);
                 ui.separator();
             }
             if let Some(e) = &app.engine {
@@ -46,9 +52,47 @@ pub fn status_bar(app: &mut App, root: &mut egui::Ui) {
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 ui.label(RichText::new(&app.hover_info).monospace());
+                ui.separator();
+                interface_scale(ui);
             });
         });
     });
+}
+
+/// The interface-scale readout: what Ctrl+= and Ctrl+- have done to the size
+/// of the whole UI, as a percentage.
+///
+/// egui owns the zoom itself and already persists it with the rest of its
+/// memory, so this reads `zoom_factor` every frame rather than keeping a copy
+/// that could drift out of step with the keyboard. Clicking resets to 100%,
+/// the same as Ctrl+0.
+fn interface_scale(ui: &mut egui::Ui) {
+    let zoom = ui.ctx().zoom_factor();
+    let default = (zoom - 1.0).abs() < 0.001;
+    // Quiet at 100%, so the usual case costs the eye nothing; accented once
+    // the scale is somewhere the user put it and might want to undo.
+    let colour = if default { KEY } else { ACCENT };
+    let resp = ui
+        .add(
+            egui::Label::new(
+                RichText::new(format!("{}  {:.0}%", fonts::icon::MAGNIFIER, zoom * 100.0))
+                    .small()
+                    .color(colour),
+            )
+            .sense(egui::Sense::click()),
+        )
+        .on_hover_cursor(egui::CursorIcon::PointingHand);
+    // Help mode has its own popover for this; two tooltips over one label
+    // would fight for the same corner.
+    let resp = if help::enabled(ui.ctx()) {
+        resp
+    } else {
+        resp.on_hover_text("Interface scale — Ctrl+= / Ctrl+- to change, click to reset to 100%")
+    };
+    if resp.clicked() {
+        ui.ctx().set_zoom_factor(1.0);
+    }
+    help::offer_response(ui, &resp, Topic::InterfaceScale);
 }
 
 pub fn side_panel(app: &mut App, root: &mut egui::Ui) {

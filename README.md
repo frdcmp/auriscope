@@ -91,6 +91,7 @@ WAV resolves to more than one MIME type. If a file still opens elsewhere, run `g
 | 📈 | **Realtime spectrum** | A separate, cheap FFT over whatever just went to the output device, with averaging and a decaying peak-hold trace. Log axis, matching the spectrogram above it. |
 | 📊 | **Delivery checks** | Integrated, short-term and momentary LUFS, loudness range and true peak (EBU R128). Clipped sample counts and run counts. Per channel: sample peak, true peak, RMS, DC offset. Stereo phase correlation. |
 | 🎛️ | **A real player** | Sample-accurate click-to-seek, drag-to-select with loop regions, gain and pan, per-channel mute and solo, keyboard navigation. Clicking a channel's name in **Levels** picks it out: drawn full height and played out of both speakers, the way that channel would look and sound imported as a mono file. Whatever you are not hearing is dimmed wherever it appears — waveform, spectrogram and its own strip of meters. Opens by double-click, drag-and-drop, `Ctrl+O` or a command-line argument, and a **Recent** menu beside the Open button reopens the last dozen files. |
+| 📸 | **Capture what you see** | The camera beside the settings button saves the waveform, spectrogram and spectrum as a PNG — just the views, without the bars and the sidebar around them — and writes a `.json` of the same name beside it holding everything the side panel says: the file, the WAVE header, Broadcast Wave, tags, markers, loudness, per-channel levels, and the analysis and time range the picture was taken through. `Ctrl+Shift+S`. |
 | ⚙️ | **One settings dialog** | `Ctrl+,` holds every view control. Show or hide each pane on its own, and a hidden pane gives its space to the others. Or merge the waveform over the spectrogram in one strip, each with its own opacity. |
 | 🗂️ | **A side panel worth reading** | Cards for the file, the WAVE header, Broadcast Wave metadata, tags, cue markers, loudness, per-channel levels, the live analysis parameters and the cursor. |
 | 🔒 | **Read-only by design** | Auriscope never writes to your audio. Your settings persist between runs; your files do not change. The list of files you have opened stays on your machine, and Settings → Files switches it off or clears it. |
@@ -212,6 +213,7 @@ Text is set in [JetBrains Mono Nerd Font](https://www.nerdfonts.com/), bundled: 
 | `+` `-` | Zoom in / out | | Middle-drag | Scroll sideways |
 | `Esc` | Clear highlight, then range | | Right-click | Clear highlight and range |
 | `Ctrl+O` `Ctrl+,` | Open file / settings | | Drag divider | Rebalance panes (double-click resets) |
+| `Ctrl+Shift+S` | Save the views as PNG + JSON | | | |
 
 Selection works the way a DAW's does. Dragging highlights a region and also sets a range on the time ruler, shown as a band with a handle at each end. The next click clears the highlight but leaves the range, so you can seek around inside it. The band turns green while looping. Vertical zoom runs from 1x to 4096x, about 72 dB, which is enough to lift a noise floor to full height. At 1x the strip is exactly full scale: 0 dBFS sits on the top edge, with no dead air above it.
 
@@ -294,8 +296,9 @@ cargo clippy --all-targets -- -D warnings
 # playhead progress, tap throughput and underruns. No window.
 cargo run --example play -- file.wav 3 1.5
 
-# Capture one frame to PPM and exit. This is how the screenshot was made.
-AURISCOPE_SCREENSHOT=shot.ppm cargo run -- file.wav
+# Capture one frame of the whole window and exit; a `.ppm` path writes the
+# raw format instead. This is how the screenshot was made.
+AURISCOPE_SCREENSHOT=shot.png cargo run -- file.wav
 ```
 
 Screenshot variants: `AURISCOPE_SCREENSHOT_ZOOM=1.00,1.06` frames a time range, which exercises the detail-tile path; `AURISCOPE_SCREENSHOT_SETTINGS=1` opens with the settings dialog up, and `=end` scrolls it to the last card; `AURISCOPE_SCREENSHOT_RANGE=0.4,0.9` sets a looped range on the ruler.

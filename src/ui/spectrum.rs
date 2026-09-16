@@ -11,7 +11,9 @@ const MIN_HZ: f32 = 20.0;
 const DB_TOP: f32 = 0.0;
 const DB_BOTTOM: f32 = -100.0;
 
-pub fn bottom_panel(app: &mut App, root: &mut egui::Ui) {
+/// Draw the realtime spectrum. Returns the panel's rect, so a capture can
+/// take it in along with the views above it.
+pub fn bottom_panel(app: &mut App, root: &mut egui::Ui) -> egui::Rect {
     egui::Panel::bottom("spectrum")
         .resizable(true)
         .default_size(170.0)
@@ -116,5 +118,7 @@ pub fn bottom_panel(app: &mut App, root: &mut egui::Ui) {
                 curve,
                 Stroke::new(1.5, Color32::from_rgb(120, 200, 255)),
             ));
-        });
+        })
+        .response
+        .rect
 }

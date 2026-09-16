@@ -1,6 +1,7 @@
 //! The window. Owns no audio state beyond what it needs to draw: it reads
 //! atomics from the engine, cached analysis results, and the live tap.
 
+mod capture;
 pub mod fonts;
 pub mod help;
 pub mod icon;
@@ -197,6 +198,9 @@ struct DetailKey {
 /// How long the view must hold still before a detail tile is recomputed.
 const DETAIL_SETTLE: std::time::Duration = std::time::Duration::from_millis(80);
 
+/// How long a note in the status bar stays up before it clears itself.
+const NOTICE_LIFE: std::time::Duration = std::time::Duration::from_secs(6);
+
 enum Msg {
     Stage(String),
     Progress(f32),
@@ -287,8 +291,19 @@ pub struct App {
     pub updater: update::Updater,
     last_tick: Instant,
     pending_open: Option<PathBuf>,
-    /// Dev hook: `AURISCOPE_SCREENSHOT=out.ppm` writes one frame after the
-    /// file is fully analysed, then exits. Used to eyeball rendering headless.
+    /// A window capture on its way to disk, from the camera button in the
+    /// transport bar. See [`capture`].
+    capture: Option<capture::Capture>,
+    /// What a capture keeps: the waveform, spectrogram and spectrum panels
+    /// together, as they were laid out last frame.
+    views_rect: egui::Rect,
+    /// A line the status bar shows for a few seconds and then drops: what was
+    /// saved, and when it was said.
+    notice: Option<(String, Instant)>,
+    /// Dev hook: `AURISCOPE_SCREENSHOT=out.png` writes one frame of the whole
+    /// window after the file is fully analysed, then exits. Used to eyeball
+    /// rendering headless. Unlike the camera button this keeps the chrome, and
+    /// a `.ppm` path gets the raw format it has always written.
     screenshot: Option<(PathBuf, Option<Instant>)>,
 }
 
@@ -369,6 +384,9 @@ impl App {
             updater,
             last_tick: Instant::now(),
             pending_open,
+            capture: None,
+            views_rect: egui::Rect::NOTHING,
+            notice: None,
             screenshot: std::env::var_os("AURISCOPE_SCREENSHOT").map(|p| (PathBuf::from(p), None)),
         }
     }
@@ -744,8 +762,8 @@ impl App {
     // ---- input -----------------------------------------------------------
 
     fn handle_shortcuts(&mut self, ctx: &egui::Context) {
-        let (space, home, end, left, right, l, f, esc, plus, minus, open, comma, f1, shift) = ctx
-            .input(|i| {
+        let (space, home, end, left, right, l, f, esc, plus, minus, open, comma, shot, f1, shift) =
+            ctx.input(|i| {
                 (
                     i.key_pressed(egui::Key::Space),
                     i.key_pressed(egui::Key::Home),
@@ -755,10 +773,15 @@ impl App {
                     i.key_pressed(egui::Key::L),
                     i.key_pressed(egui::Key::F),
                     i.key_pressed(egui::Key::Escape),
-                    i.key_pressed(egui::Key::Plus) || i.key_pressed(egui::Key::Equals),
-                    i.key_pressed(egui::Key::Minus),
+                    // Bare, because egui takes the same keys under Ctrl for
+                    // the interface scale. Without the guard one Ctrl+= both
+                    // scaled the UI and zoomed the view.
+                    !i.modifiers.command
+                        && (i.key_pressed(egui::Key::Plus) || i.key_pressed(egui::Key::Equals)),
+                    !i.modifiers.command && i.key_pressed(egui::Key::Minus),
                     i.modifiers.command && i.key_pressed(egui::Key::O),
                     i.modifiers.command && i.key_pressed(egui::Key::Comma),
+                    i.modifiers.command && i.modifiers.shift && i.key_pressed(egui::Key::S),
                     i.key_pressed(egui::Key::F1),
                     i.modifiers.shift,
                 )
@@ -768,6 +791,11 @@ impl App {
         }
         if comma {
             self.settings_open = !self.settings_open;
+        }
+        // Before the early return below, so the dialog being up is no reason
+        // not to take a picture; the capture leaves it out of the frame.
+        if shot {
+            self.save_screenshot();
         }
         // Before the early return below: help mode is as useful over the
         // settings dialog as over the panels, so F1 has to reach it there.
@@ -845,6 +873,43 @@ impl App {
         }
     }
 
+    /// Ask where a capture of the views should go, and queue it.
+    ///
+    /// The dialog comes first so that nothing is left to do once the pixels
+    /// arrive: a capture that had to stop and ask would be a capture of the
+    /// window with a file dialog in front of it.
+    fn save_screenshot(&mut self) {
+        if self.capture.is_some() {
+            return;
+        }
+        let source = self.audio.as_ref().map(|a| a.info.path.clone());
+        let mut dialog = rfd::FileDialog::new()
+            .add_filter("PNG image", &["png"])
+            .set_title("Save views as PNG")
+            .set_file_name(capture::default_name(source.as_deref()));
+        if let Some(dir) = source.as_deref().and_then(Path::parent) {
+            dialog = dialog.set_directory(dir);
+        }
+        if let Some(path) = dialog.save_file() {
+            self.capture = Some(capture::Capture::Settling(capture::with_png_extension(
+                path,
+            )));
+        }
+    }
+
+    /// The status bar's transient line, while it is still fresh. Stale ones
+    /// clear themselves here, so nothing else has to keep time.
+    fn notice(&mut self) -> Option<&str> {
+        if self
+            .notice
+            .as_ref()
+            .is_some_and(|(_, at)| at.elapsed() > NOTICE_LIFE)
+        {
+            self.notice = None;
+        }
+        self.notice.as_ref().map(|(m, _)| m.as_str())
+    }
+
     fn handle_drops(&mut self, ctx: &egui::Context) {
         let dropped: Vec<PathBuf> = ctx.input(|i| {
             i.raw
@@ -879,6 +944,62 @@ impl App {
         }
     }
 
+    /// Move a queued capture along by one frame: skip the frame that started
+    /// it, ask for the next one, then write what comes back. Called last in
+    /// the frame, so the grab covers everything drawn in it.
+    fn capture_hook(&mut self, ctx: &egui::Context) {
+        let Some(pending) = self.capture.take() else {
+            return;
+        };
+        match pending {
+            capture::Capture::Settling(path) => {
+                self.capture = Some(capture::Capture::Grabbing(path));
+                ctx.request_repaint();
+            }
+            capture::Capture::Grabbing(path) => {
+                ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(egui::UserData::default()));
+                self.capture = Some(capture::Capture::Waiting {
+                    path,
+                    views: self.views_rect,
+                    asked: Instant::now(),
+                });
+                ctx.request_repaint();
+            }
+            capture::Capture::Waiting { path, views, asked } => {
+                let shot = ctx.input(|i| {
+                    i.events.iter().find_map(|e| match e {
+                        egui::Event::Screenshot { image, .. } => Some(image.clone()),
+                        _ => None,
+                    })
+                });
+                let Some(img) = shot else {
+                    if asked.elapsed() > capture::GRAB_TIMEOUT {
+                        self.error = Some("screenshot: the window was never handed back".into());
+                        return;
+                    }
+                    self.capture = Some(capture::Capture::Waiting { path, views, asked });
+                    ctx.request_repaint();
+                    return;
+                };
+                // The grab is of the whole window; only the views are kept.
+                let views = capture::crop(&img, views, ctx.pixels_per_point());
+                let json = capture::json_path(&path);
+                let written = capture::write_png(&path, &views)
+                    .and_then(|()| capture::write_json(&json, &capture::metadata(self, &path)));
+                match written {
+                    Ok(()) => {
+                        log::info!("saved {} and {}", path.display(), json.display());
+                        self.notice = Some((
+                            format!("Saved {} and {}", file_name(&path), file_name(&json)),
+                            Instant::now(),
+                        ));
+                    }
+                    Err(e) => self.error = Some(format!("screenshot: {e:#}")),
+                }
+            }
+        }
+    }
+
     fn screenshot_hook(&mut self, ctx: &egui::Context) {
         if self.screenshot.is_none() {
             return;
@@ -892,7 +1013,7 @@ impl App {
         });
         if let Some(img) = shot {
             if let Some((path, _)) = &self.screenshot
-                && let Err(e) = write_ppm(path, &img)
+                && let Err(e) = write_dev_shot(path, &img)
             {
                 log::error!("screenshot: {e}");
             }
@@ -1065,14 +1186,26 @@ impl eframe::App for App {
         panels::top_bar(self, ui);
         panels::status_bar(self, ui);
         panels::side_panel(self, ui);
+        // The views' own corner of the window, remembered for the capture: the
+        // spectrum panel when it is shown, and the waveform and spectrogram
+        // above it. Everything else — the bars, the sidebar, the dialog — is
+        // chrome around the picture rather than part of it.
+        let mut views_rect = egui::Rect::NOTHING;
         if self.settings.show_spectrum {
-            spectrum::bottom_panel(self, ui);
+            views_rect = spectrum::bottom_panel(self, ui);
         }
-        views::central(self, ui);
+        views_rect = views_rect.union(views::central(self, ui));
+        self.views_rect = views_rect;
         panels::resize_borders(ctx);
-        // Last, so the dialog sits above the resize overlay.
-        panels::settings_window(self, ctx);
+        // Last, so the dialog sits above the resize overlay. Not while a
+        // capture is in flight, though: the dialog and the scrim under it sit
+        // over the very views the picture is of, and which frame the backend
+        // hands back is its business rather than ours.
+        if self.capture.is_none() {
+            panels::settings_window(self, ctx);
+        }
 
+        self.capture_hook(ctx);
         self.screenshot_hook(ctx);
 
         let playing = self.engine.as_ref().is_some_and(Engine::is_playing);
@@ -1086,6 +1219,26 @@ impl eframe::App for App {
             ctx.request_repaint_after(std::time::Duration::from_millis(100));
         }
     }
+}
+
+/// A path's last component, for saying what was written without saying where.
+fn file_name(path: &Path) -> String {
+    path.file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| path.display().to_string())
+}
+
+/// The dev hook's output: a PNG unless the path asks for the raw PPM the hook
+/// has always written, which needs no decoder to eyeball.
+fn write_dev_shot(path: &Path, img: &egui::ColorImage) -> anyhow::Result<()> {
+    if path
+        .extension()
+        .is_some_and(|e| e.eq_ignore_ascii_case("ppm"))
+    {
+        write_ppm(path, img)?;
+        return Ok(());
+    }
+    capture::write_png(path, img)
 }
 
 fn write_ppm(path: &Path, img: &egui::ColorImage) -> std::io::Result<()> {

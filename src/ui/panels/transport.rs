@@ -143,6 +143,7 @@ pub fn top_bar(app: &mut App, root: &mut egui::Ui) {
                 {
                     app.settings_open = !app.settings_open;
                 }
+                camera_button(app, ui);
                 if help::toggle_button(ui, app.help_mode, vec2(28.0, ROW_H))
                     .on_hover_text(if app.help_mode {
                         "Help mode on: hover anything labelled to read what it means (F1)"
@@ -394,6 +395,65 @@ fn update_notice(app: &mut App, ui: &mut egui::Ui) {
     if skip.clicked() {
         app.settings.update_skipped = Some(release.version);
     }
+}
+
+/// The camera: saves the waveform, spectrogram and spectrum as a PNG, with a
+/// JSON of everything the sidebar says about the file beside it.
+///
+/// Its tooltip is left off while a capture is on its way, because the frame
+/// being saved is the one drawn a beat after the click, and the pointer is
+/// still sitting on the button then. See [`crate::ui::capture`].
+fn camera_button(app: &mut App, ui: &mut egui::Ui) {
+    let taking = app.capture.is_some();
+    let resp = camera_icon(ui, taking);
+    let resp = if taking {
+        resp
+    } else {
+        resp.on_hover_text(
+            "Save the views as a PNG, with a JSON of the file's info beside it \
+             (Ctrl+Shift+S)",
+        )
+    };
+    if resp.clicked() && !taking {
+        app.save_screenshot();
+    }
+}
+
+/// The camera glyph: a body, the lens, and the bump over it, drawn as vectors
+/// like the buttons either side of it.
+fn camera_icon(ui: &mut egui::Ui, active: bool) -> egui::Response {
+    let (resp, painter) = ui.allocate_painter(vec2(28.0, ROW_H), Sense::click());
+    let visuals = ui.style().visuals.clone();
+    let fg = if active {
+        visuals.widgets.active.fg_stroke.color
+    } else if resp.hovered() {
+        Color32::WHITE
+    } else {
+        Color32::from_gray(215)
+    };
+    if active || resp.hovered() {
+        let bg = if active {
+            visuals.widgets.active.weak_bg_fill
+        } else {
+            visuals.widgets.hovered.weak_bg_fill
+        };
+        painter.rect_filled(resp.rect, 4.0, bg);
+    }
+    let c = resp.rect.center();
+    let body = Rect::from_center_size(c + vec2(0.0, 1.0), vec2(16.0, 11.0));
+    // The viewfinder bump, drawn before the body so the body's stroke closes
+    // the top edge over it.
+    painter.rect_filled(
+        Rect::from_min_max(
+            pos2(c.x - 4.5, body.top() - 3.0),
+            pos2(c.x - 0.5, body.top() + 1.0),
+        ),
+        1.0,
+        fg,
+    );
+    painter.rect_stroke(body, 2.0, Stroke::new(1.4, fg), egui::StrokeKind::Middle);
+    painter.circle_stroke(body.center(), 3.2, Stroke::new(1.4, fg));
+    resp
 }
 
 /// A sliders glyph for the settings button: three tracks with a knob each,

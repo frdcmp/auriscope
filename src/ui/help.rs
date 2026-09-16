@@ -248,6 +248,9 @@ pub enum Topic {
     LoopToggle,
     OutputMeter,
 
+    // ---- status bar ----------------------------------------------------
+    InterfaceScale,
+
     // ---- settings: cards -----------------------------------------------
     PanesCard,
     SpectrogramCard,
@@ -796,6 +799,14 @@ impl Topic {
                  the signal is rather than just how tall. The dB scale puts labelled gridlines \
                  on the waveform.",
             ),
+            T::InterfaceScale => (
+                "Interface scale",
+                "How large the whole interface is drawn, as a percentage of its natural size. \
+                 Ctrl+= and Ctrl+- move it in steps of 10%, Ctrl+0 or a click here puts it back \
+                 to 100%, and the setting is remembered between runs. This scales the app's own \
+                 text and controls only — it is nothing to do with how far the views are zoomed \
+                 into the file.",
+            ),
             T::WaveColour => (
                 "Colour",
                 "The waveform's colour. The RMS overlay is drawn as a lighter tint of whatever \
@@ -939,6 +950,7 @@ mod tests {
         Topic::RulerRange,
         Topic::LoopToggle,
         Topic::OutputMeter,
+        Topic::InterfaceScale,
         Topic::PanesCard,
         Topic::SpectrogramCard,
         Topic::WaveformCard,

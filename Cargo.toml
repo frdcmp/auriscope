@@ -33,10 +33,15 @@ colorous = "1.0"
 # through the XDG desktop portal instead, for desktops where that is the
 # native dialog and for builds that want no GTK dependency.
 rfd = { version = "0.17", default-features = false }
+# PNG encoding, for the window capture the camera button saves. Pure Rust,
+# and only the encoder half of the crate is used.
+png = "0.18"
 anyhow = "1.0"
 log = "0.4"
 env_logger = "0.11"
 serde = { version = "1.0", features = ["derive"] }
+# The sidecar metadata a capture writes beside its PNG.
+serde_json = "1.0"
 # Update check (the `update-check` feature): one GET to the GitHub releases
 # API at startup, at most once a day. rustls with bundled roots, so it works
 # the same on a bare Windows box as on Linux.

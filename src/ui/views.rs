@@ -38,6 +38,9 @@ pub struct TexKey {
 }
 
 const RULER_H: f32 = 22.0;
+/// Drop from the top of the ruler to the text in it. Shared with the axis
+/// caps, which sit in the ruler's corners and have to line up with it.
+const RULER_PAD: f32 = 2.0;
 /// Height of the draggable divider between the waveform and the spectrogram.
 const SPLITTER_H: f32 = 7.0;
 /// Neither strip may be dragged below this.
@@ -67,15 +70,38 @@ const RANGE_EDGE: Color32 = Color32::from_rgb(150, 190, 235);
 const CLIP: Color32 = Color32::from_rgb(255, 70, 70);
 const CLIP_RMS: Color32 = Color32::from_rgb(255, 150, 150);
 const DB_AXIS: Color32 = Color32::from_rgb(150, 190, 225);
-const SPLITTER_BG: Color32 = Color32::from_rgb(28, 28, 34);
+/// The chrome the views sit in. The ruler across the top, the splitter
+/// between the strips and the axis gutters down the sides all share it, so
+/// the scales read as a frame around the signal rather than as more of it.
+const CHROME: Color32 = Color32::from_rgb(28, 28, 34);
+const SPLITTER_BG: Color32 = CHROME;
 const SPLITTER_BG_HOT: Color32 = Color32::from_rgb(58, 58, 70);
 const SPLITTER_GRIP: Color32 = Color32::from_gray(110);
 const SPLITTER_GRIP_HOT: Color32 = Color32::from_gray(215);
 /// How much of its brightness a muted channel's spectrogram keeps: enough to
 /// see that the content is still there, little enough to read as switched off.
 const MUTED_SPEC: f32 = 0.3;
+/// Length of an axis tick, measured out from the edge of the signal.
+const AXIS_TICK: f32 = 4.0;
+/// Gap between a tick and the label that names it. Wide enough that the tick
+/// reads as a tick and not as the minus sign the dB labels do without.
+const AXIS_GAP: f32 = 4.0;
+/// Drop from the top of a column to its cap. Two points below where the ruler
+/// hangs its times: the cap is a heading for what is underneath it, not
+/// another entry in the row it happens to share.
+const AXIS_CAP_PAD: f32 = RULER_PAD + 2.0;
+/// The band a column's cap occupies at the top of it.
+const AXIS_CAP_H: f32 = 18.0;
+/// Hairline between a gutter and the signal it labels.
+const AXIS_EDGE: Color32 = Color32::from_gray(48);
+/// Frequency ticks and their labels: the tick is a hint, the number is the
+/// thing being read, so only the number is bright.
+const FREQ_TICK: Color32 = Color32::from_gray(110);
+const FREQ_TEXT: Color32 = Color32::from_gray(200);
 
-pub fn central(app: &mut App, root: &mut egui::Ui) {
+/// Draw the ruler, waveform and spectrogram. Returns the rect they occupy,
+/// which is what a window capture is cropped to.
+pub fn central(app: &mut App, root: &mut egui::Ui) -> Rect {
     egui::CentralPanel::default()
         .frame(egui::Frame::NONE.fill(BG))
         .show(root, |ui| {
@@ -119,6 +145,43 @@ pub fn central(app: &mut App, root: &mut egui::Ui) {
                 (body_h, 0.0)
             };
 
+            // The axes get columns of their own rather than being written on
+            // top of the signal. Merged, the two panes share one: frequency
+            // down the left, amplitude down the right. Apart, each strip
+            // carries its axis on the right, clear of the start of the clip.
+            // Both strips reserve the same columns either way, so the time
+            // axis stays aligned all the way down the window.
+            let show_db = show_w && app.settings.show_db_scale;
+            let gw = gutter_w(ui);
+            let guts = if merged {
+                Gutters {
+                    left: gw,
+                    right: if show_db { gw } else { 0.0 },
+                }
+            } else if show_s || show_db {
+                Gutters {
+                    left: 0.0,
+                    right: gw,
+                }
+            } else {
+                Gutters::default()
+            };
+
+            // Where the ruler meets an axis column, the corner belongs to the
+            // column: it names the unit, and the time axis stops short of it.
+            // The right-hand column under the ruler is the first strip's, so
+            // it reads in dB whenever there is a waveform up there.
+            let ruler_caps = [
+                (guts.left > 0.0).then_some(Unit::Hz),
+                if show_db {
+                    Some(Unit::Db)
+                } else if show_s && !show_w {
+                    Some(Unit::Hz)
+                } else {
+                    None
+                },
+            ];
+
             let (ruler_resp, ruler_p) =
                 ui.allocate_painter(vec2(avail.x, RULER_H), Sense::click_and_drag());
             let wave = (show_w && !merged)
@@ -152,12 +215,13 @@ pub fn central(app: &mut App, root: &mut egui::Ui) {
 
             // Interaction is shared: any strip drives the view. Only the
             // waveform gets the vertical-zoom gesture.
-            interact(app, ui, &ruler_resp, Surface::Ruler);
+            interact(app, ui, &ruler_resp, guts.plot(ruler_resp.rect), Surface::Ruler);
             if let Some((r, _)) = &wave {
-                interact(app, ui, r, Surface::Wave);
+                interact(app, ui, r, guts.plot(r.rect), Surface::Wave);
             }
             if let Some((r, _)) = &spec {
-                interact(app, ui, r, if merged { Surface::Wave } else { Surface::Spec });
+                let surface = if merged { Surface::Wave } else { Surface::Spec };
+                interact(app, ui, r, guts.plot(r.rect), surface);
             }
 
             let bottom = spec
@@ -166,17 +230,24 @@ pub fn central(app: &mut App, root: &mut egui::Ui) {
                 .or_else(|| wave.as_ref().map(|(r, _)| r.rect.max))
                 .unwrap_or(ruler_resp.rect.max);
             let views = Rect::from_min_max(ruler_resp.rect.min, bottom);
-            middle_pan(app, ui, views);
+            middle_pan(app, ui, views, guts.plot(views));
 
-            draw_ruler(app, &ruler_p, ruler_resp.rect);
+            draw_ruler(
+                app,
+                &ruler_p,
+                ruler_resp.rect,
+                guts.plot(ruler_resp.rect),
+                ruler_caps,
+            );
             if let Some((r, p)) = &wave {
-                draw_waveform(app, p, r.rect, None);
+                draw_waveform(app, p, r.rect, guts.plot(r.rect), None);
             }
             if let Some((r, p)) = &spec {
-                draw_spectrogram(app, ui, p, r.rect);
+                draw_spectrogram(app, ui, p, r.rect, guts.plot(r.rect));
                 if merged {
                     // After the spectrogram, so it lands on top of it.
-                    draw_waveform(app, p, r.rect, Some(app.settings.merge_opacity));
+                    let alpha = Some(app.settings.merge_opacity);
+                    draw_waveform(app, p, r.rect, guts.plot(r.rect), alpha);
                 }
             }
             if let Some(sr) = &split_resp {
@@ -194,25 +265,116 @@ pub fn central(app: &mut App, root: &mut egui::Ui) {
                 .or_else(|| spec.as_ref().map(|(r, _)| r.rect.min))
                 .unwrap_or(ruler_resp.rect.max);
             let full = Rect::from_min_max(top, bottom);
-            draw_overlays(app, &ui.painter_at(full), full);
+            let full_plot = guts.plot(full);
+            draw_overlays(app, &ui.painter_at(full), full, full_plot);
 
             // Hover readout.
             let spec_hover = spec.as_ref().and_then(|(r, _)| r.hover_pos().map(|p| (p, r.rect)));
             if let Some((pos, rect)) = spec_hover {
-                spectrogram_hover(app, pos, rect);
+                spectrogram_hover(app, pos, rect, guts.plot(rect));
             } else if let Some(pos) = wave
                 .as_ref()
                 .and_then(|(r, _)| r.hover_pos())
                 .or(ruler_resp.hover_pos())
             {
-                let f = x_to_frame(&app.view, full, pos.x);
+                let f = x_to_frame(&app.view, full_plot, pos.x);
                 let secs = f / app.sample_rate();
                 app.hover_info = fmt_time_field(secs, app.duration_secs());
             }
-        });
+        })
+        .response
+        .rect
+}
+
+/// What an axis column measures. Named once, at the top of the column, so the
+/// numbers running down it can stay bare.
+#[derive(Clone, Copy, PartialEq)]
+enum Unit {
+    Hz,
+    Db,
+}
+
+impl Unit {
+    fn label(self) -> &'static str {
+        match self {
+            Unit::Hz => "Hz",
+            Unit::Db => "dB",
+        }
+    }
+
+    /// The colour of the scale it caps, so cap and numbers read as one column.
+    fn color(self) -> Color32 {
+        match self {
+            Unit::Hz => FREQ_TEXT,
+            Unit::Db => DB_AXIS,
+        }
+    }
+}
+
+/// Name an axis column, centred across the top of it. Hung from the top edge
+/// rather than centred in the band, so a cap in a ruler corner keeps its
+/// distance from the times beside it however tall the ruler is.
+fn draw_cap(p: &egui::Painter, gut: Rect, unit: Unit) {
+    p.text(
+        pos2(gut.center().x, gut.top() + AXIS_CAP_PAD),
+        Align2::CENTER_TOP,
+        unit.label(),
+        FontId::monospace(fonts::RULER),
+        unit.color().gamma_multiply(0.85),
+    );
 }
 
 // ---- geometry --------------------------------------------------------------
+
+/// The columns reserved either side of a strip for its axes. Every strip in
+/// the window gets the same pair, so the time axis lines up between them.
+#[derive(Clone, Copy, Default)]
+struct Gutters {
+    left: f32,
+    right: f32,
+}
+
+impl Gutters {
+    /// The part of `rect` the signal itself is drawn in.
+    fn plot(self, rect: Rect) -> Rect {
+        let l = rect.left() + self.left;
+        Rect::from_min_max(
+            pos2(l, rect.top()),
+            pos2((rect.right() - self.right).max(l + 1.0), rect.bottom()),
+        )
+    }
+}
+
+/// How wide one gutter has to be: a tick, a gap, the widest label either
+/// scale writes and a little air after it. Neither goes past three characters
+/// — "20k", "100", "inf", "48" — so the column stays narrow at full size.
+/// Measured rather than guessed, so it stays snug whatever the display scale
+/// does to the type.
+fn gutter_w(ui: &egui::Ui) -> f32 {
+    let cw = ui
+        .ctx()
+        .fonts_mut(|f| f.glyph_width(&FontId::monospace(fonts::RULER), '0'));
+    (AXIS_TICK + AXIS_GAP + cw * 3.0 + 2.0).ceil()
+}
+
+/// Fill the axis gutters and mark them off from the signal. Called before
+/// anything is drawn in them, and only by whichever pass owns the strip's
+/// background.
+fn paint_gutters(p: &egui::Painter, rect: Rect, plot: Rect) {
+    for gut in [
+        Rect::from_min_max(rect.min, pos2(plot.left(), rect.bottom())),
+        Rect::from_min_max(pos2(plot.right(), rect.top()), rect.max),
+    ] {
+        if gut.width() > 0.0 {
+            p.rect_filled(gut, 0.0, CHROME);
+        }
+    }
+    for x in [plot.left(), plot.right()] {
+        if x > rect.left() && x < rect.right() {
+            p.vline(x, rect.y_range(), Stroke::new(1.0, AXIS_EDGE));
+        }
+    }
+}
 
 pub fn frame_to_x(view: &View, rect: Rect, frame: f64) -> f32 {
     rect.left() + ((frame - view.start) / view.len()) as f32 * rect.width()
@@ -235,11 +397,13 @@ enum Surface {
 /// Grab distance for the range handles on the ruler, in points.
 const HANDLE_GRAB: f32 = 8.0;
 
-fn interact(app: &mut App, ui: &egui::Ui, resp: &egui::Response, surface: Surface) {
+/// `plot` is the strip's signal area: the response covers the axis gutters
+/// too, but every position is read against the part that carries the clip.
+fn interact(app: &mut App, ui: &egui::Ui, resp: &egui::Response, plot: Rect, surface: Surface) {
     if app.audio.is_none() {
         return;
     }
-    let rect = resp.rect;
+    let rect = plot;
     let total = app.total_frames();
     let is_wave = surface == Surface::Wave;
 
@@ -392,7 +556,7 @@ fn interact(app: &mut App, ui: &egui::Ui, resp: &egui::Response, surface: Surfac
 /// This reads raw pointer state rather than a `Response`, so the pan keeps
 /// following the mouse once it leaves the strip the drag started on, and so a
 /// single gesture cannot be applied once per strip.
-fn middle_pan(app: &mut App, ui: &egui::Ui, views: Rect) {
+fn middle_pan(app: &mut App, ui: &egui::Ui, views: Rect, plot: Rect) {
     let (down, pressed, pos, delta) = ui.input(|i| {
         (
             i.pointer.button_down(egui::PointerButton::Middle),
@@ -412,7 +576,7 @@ fn middle_pan(app: &mut App, ui: &egui::Ui, views: Rect) {
         ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
         if delta.x != 0.0 {
             let total = app.total_frames();
-            pan(app, views, total, delta.x);
+            pan(app, plot, total, delta.x);
         }
     }
 }
@@ -428,38 +592,41 @@ fn pan(app: &mut App, rect: Rect, total: f64, amount: f32) {
 
 // ---- ruler -----------------------------------------------------------------
 
-fn draw_ruler(app: &App, p: &egui::Painter, rect: Rect) {
-    p.rect_filled(rect, 0.0, Color32::from_rgb(28, 28, 34));
+/// `caps` names the axis column under each corner of the ruler, left then
+/// right; a column with nothing in it under the ruler gets `None`.
+fn draw_ruler(app: &App, p: &egui::Painter, rect: Rect, plot: Rect, caps: [Option<Unit>; 2]) {
+    p.rect_filled(rect, 0.0, CHROME);
     if app.audio.is_none() {
+        frame_ruler(p, rect, plot, caps);
         return;
     }
     let sr = app.sample_rate();
     let visible_secs = app.view.len() / sr;
-    let step = nice_time_step(visible_secs, rect.width(), 90.0);
+    let step = nice_time_step(visible_secs, plot.width(), 90.0);
     let start_secs = app.view.start / sr;
     let first = (start_secs / step).floor() * step;
     let mut t = first;
     let font = FontId::monospace(fonts::RULER);
     let minor = step / 5.0;
     while t <= start_secs + visible_secs + step {
-        let x = frame_to_x(&app.view, rect, t * sr);
-        if x >= rect.left() - 1.0 && x <= rect.right() + 1.0 {
+        let x = frame_to_x(&app.view, plot, t * sr);
+        if x >= plot.left() - 1.0 && x <= plot.right() + 1.0 {
             p.vline(
                 x,
                 Rangef::new(rect.bottom() - 8.0, rect.bottom()),
                 Stroke::new(1.0, Color32::from_gray(150)),
             );
-            p.text(
-                pos2(x + 3.0, rect.top() + 2.0),
-                Align2::LEFT_TOP,
-                fmt_time_step(t, step),
-                font.clone(),
-                Color32::from_gray(200),
-            );
+            // A label that would run into the corner is dropped rather than
+            // written over it: the tick is still there to read the time off.
+            let c = Color32::from_gray(200);
+            let g = p.layout_no_wrap(fmt_time_step(t, step), font.clone(), c);
+            if x + 3.0 + g.size().x <= plot.right() {
+                p.galley(pos2(x + 3.0, rect.top() + RULER_PAD), g, c);
+            }
         }
         for k in 1..5 {
-            let xm = frame_to_x(&app.view, rect, (t + minor * k as f64) * sr);
-            if xm >= rect.left() && xm <= rect.right() {
+            let xm = frame_to_x(&app.view, plot, (t + minor * k as f64) * sr);
+            if xm >= plot.left() && xm <= plot.right() {
                 p.vline(
                     xm,
                     Rangef::new(rect.bottom() - 4.0, rect.bottom()),
@@ -469,18 +636,48 @@ fn draw_ruler(app: &App, p: &egui::Painter, rect: Rect) {
         }
         t += step;
     }
-    draw_range_band(app, p, rect);
+    draw_range_band(app, p, rect, plot);
+    frame_ruler(p, rect, plot, caps);
+}
+
+/// Rule the ruler off from the axis columns beside it and the signal below it,
+/// and name each column in the corner it starts from. Drawn last, so nothing
+/// the time axis paints can run through it.
+fn frame_ruler(p: &egui::Painter, rect: Rect, plot: Rect, caps: [Option<Unit>; 2]) {
+    let corners = [
+        Rect::from_min_max(rect.min, pos2(plot.left(), rect.bottom())),
+        Rect::from_min_max(pos2(plot.right(), rect.top()), rect.max),
+    ];
+    for (corner, cap) in corners.into_iter().zip(caps) {
+        if corner.width() <= 0.0 {
+            continue;
+        }
+        p.rect_filled(corner, 0.0, CHROME);
+        if let Some(unit) = cap {
+            draw_cap(p, corner, unit);
+        }
+    }
+    for x in [plot.left(), plot.right()] {
+        if x > rect.left() && x < rect.right() {
+            p.vline(x, rect.y_range(), Stroke::new(1.0, AXIS_EDGE));
+        }
+    }
+    p.hline(
+        rect.x_range(),
+        rect.bottom() - 0.5,
+        Stroke::new(1.0, AXIS_EDGE),
+    );
 }
 
 /// The kept range on the ruler: a band with a handle at each end, green
 /// when it is what the loop plays.
-fn draw_range_band(app: &App, p: &egui::Painter, rect: Rect) {
+fn draw_range_band(app: &App, p: &egui::Painter, rect: Rect, plot: Rect) {
     let Some((a, b)) = app.range else { return };
     let (x0, x1) = (
-        frame_to_x(&app.view, rect, a),
-        frame_to_x(&app.view, rect, b),
+        frame_to_x(&app.view, plot, a),
+        frame_to_x(&app.view, plot, b),
     );
-    if x1 < rect.left() || x0 > rect.right() {
+    if x1 < plot.left() || x0 > plot.right() {
         return;
     }
     let (fill, edge) = if app.loop_enabled {
@@ -495,8 +692,8 @@ fn draw_range_band(app: &App, p: &egui::Painter, rect: Rect) {
         )
     };
     let band = Rect::from_min_max(
-        pos2(x0.max(rect.left()), rect.top()),
-        pos2(x1.min(rect.right()), rect.bottom()),
+        pos2(x0.max(plot.left()), rect.top()),
+        pos2(x1.min(plot.right()), rect.bottom()),
     );
     p.rect_filled(band, 0.0, fill);
     // Handles: small triangles pointing into the range.
@@ -504,7 +701,7 @@ fn draw_range_band(app: &App, p: &egui::Painter, rect: Rect) {
     let w = h * 0.8;
     let top = rect.top() + 1.0;
     for (x, dir) in [(x0, 1.0f32), (x1, -1.0)] {
-        if x < rect.left() - w || x > rect.right() + w {
+        if x < plot.left() || x > plot.right() {
             continue;
         }
         p.vline(x, rect.y_range(), Stroke::new(1.0, edge));
@@ -522,10 +719,12 @@ fn draw_range_band(app: &App, p: &egui::Painter, rect: Rect) {
 
 // ---- waveform --------------------------------------------------------------
 
-/// Draw the waveform. `overlay` is `Some(alpha)` when drawing on top of the
-/// spectrogram as a single merged pane, in which case the background, the
-/// separators and the channel labels are left to the spectrogram underneath.
-fn draw_waveform(app: &App, p: &egui::Painter, rect: Rect, overlay: Option<f32>) {
+/// Draw the waveform. `rect` is the whole strip and `plot` the part of it
+/// left over once the axis gutters are taken off; the signal never leaves
+/// `plot`. `overlay` is `Some(alpha)` when drawing on top of the spectrogram
+/// as a single merged pane, in which case the background, the separators, the
+/// gutter edges and the channel labels are left to the spectrogram underneath.
+fn draw_waveform(app: &App, p: &egui::Painter, rect: Rect, plot: Rect, overlay: Option<f32>) {
     let over = overlay.is_some();
     let alpha = (overlay.unwrap_or(1.0).clamp(0.05, 1.0) * 255.0) as u8;
     let tint = |c: Color32| -> Color32 {
@@ -537,11 +736,12 @@ fn draw_waveform(app: &App, p: &egui::Painter, rect: Rect, overlay: Option<f32>)
     };
     if !over {
         p.rect_filled(rect, 0.0, BG);
+        paint_gutters(p, rect, plot);
     }
     let (Some(audio), Some(pyr)) = (&app.audio, &app.pyramid) else {
         if app.audio.is_some() && !over {
             p.text(
-                rect.center(),
+                plot.center(),
                 Align2::CENTER_CENTER,
                 "building waveform…",
                 FontId::proportional(fonts::BODY),
@@ -554,7 +754,7 @@ fn draw_waveform(app: &App, p: &egui::Painter, rect: Rect, overlay: Option<f32>)
     // An isolated channel is the only row, so it gets the whole height.
     let chans = app.visible_channels(nch);
     let ch_h = rect.height() / chans.len() as f32;
-    let width = rect.width().max(1.0) as usize;
+    let width = plot.width().max(1.0) as usize;
     let show_rms = app.settings.show_rms;
     let vz = app.settings.wave_v_zoom;
     // Zoomed in far enough that a pixel spans only a few samples: draw the
@@ -577,7 +777,7 @@ fn draw_waveform(app: &App, p: &egui::Painter, rect: Rect, overlay: Option<f32>)
             Color32::from_gray(if per_sample { 78 } else { 50 })
         };
         if !per_sample {
-            p.hline(rect.x_range(), mid, Stroke::new(1.0, zero_c));
+            p.hline(plot.x_range(), mid, Stroke::new(1.0, zero_c));
         }
         if !over && row > 0 {
             p.hline(
@@ -610,7 +810,7 @@ fn draw_waveform(app: &App, p: &egui::Painter, rect: Rect, overlay: Option<f32>)
                 .enumerate()
                 .map(|(i, &s)| {
                     pos2(
-                        frame_to_x(&app.view, rect, (a + i) as f64),
+                        frame_to_x(&app.view, plot, (a + i) as f64),
                         mid - (s * vz).clamp(-1.0, 1.0) * half,
                     )
                 })
@@ -654,7 +854,7 @@ fn draw_waveform(app: &App, p: &egui::Painter, rect: Rect, overlay: Option<f32>)
         } else {
             let bins = pyr.query(ch, &audio.channels[ch], app.view.start, app.view.end, width);
             for (i, b) in bins.iter().enumerate() {
-                let x = rect.left() + i as f32 + 0.5;
+                let x = plot.left() + i as f32 + 0.5;
                 let y0 = mid - (b.max * vz).clamp(-1.0, 1.0) * half;
                 let y1 = mid - (b.min * vz).clamp(-1.0, 1.0) * half;
                 let clipped = b.max >= CLIP_THRESHOLD || b.min <= -CLIP_THRESHOLD;
@@ -672,19 +872,23 @@ fn draw_waveform(app: &App, p: &egui::Painter, rect: Rect, overlay: Option<f32>)
         }
         if per_sample {
             p.extend(egui::Shape::dashed_line(
-                &[pos2(rect.left(), mid), pos2(rect.right(), mid)],
+                &[pos2(plot.left(), mid), pos2(plot.right(), mid)],
                 Stroke::new(1.0, zero_c),
                 5.0,
                 4.0,
             ));
         }
-        if app.settings.show_db_scale {
-            draw_db_axis(p, rect, top, ch_h, mid, half, vz, over);
+        // The dB scale lives in the right-hand gutter, whichever way the
+        // views are arranged: on the left it would sit where the spectrogram
+        // keeps its frequencies when the two are merged.
+        let gut = Rect::from_min_max(pos2(plot.right(), top), pos2(rect.right(), top + ch_h));
+        if app.settings.show_db_scale && gut.width() >= AXIS_TICK {
+            draw_db_axis(p, gut, mid, half, vz);
         }
         // Mono needs no label: there is nothing for it to tell apart.
         if !over && nch > 1 {
             p.text(
-                pos2(rect.left() + 4.0, top + 2.0),
+                pos2(plot.left() + 4.0, top + 2.0),
                 Align2::LEFT_TOP,
                 channel_label(ch, nch),
                 FontId::monospace(fonts::RULER),
@@ -695,45 +899,25 @@ fn draw_waveform(app: &App, p: &egui::Painter, rect: Rect, overlay: Option<f32>)
 }
 
 /// Amplitude scale for one waveform channel, in dBFS, mirrored above and
-/// below the zero line and following the vertical zoom. On the left in the
-/// standalone waveform; on the right when overlaid on the spectrogram, whose
-/// frequency axis already owns the left edge.
-#[allow(clippy::too_many_arguments)]
-fn draw_db_axis(
-    p: &egui::Painter,
-    rect: Rect,
-    top: f32,
-    ch_h: f32,
-    mid: f32,
-    half: f32,
-    vz: f32,
-    right: bool,
-) {
+/// below the zero line and following the vertical zoom. `gut` is the channel's
+/// slice of the strip's right-hand gutter, so the scale is never drawn over
+/// the signal; the ticks sit against the signal and the labels read outwards.
+///
+/// The labels carry no minus sign. Nothing on a dBFS scale is above zero, so
+/// the sign is a given, and dropping it buys a character off the width of the
+/// gutter — which is width taken from the clip on every strip.
+fn draw_db_axis(p: &egui::Painter, gut: Rect, mid: f32, half: f32, vz: f32) {
     const STEPS: [f32; 14] = [
         0.0, -3.0, -6.0, -12.0, -18.0, -24.0, -30.0, -36.0, -42.0, -48.0, -60.0, -72.0, -84.0,
         -96.0,
     ];
     let font = FontId::monospace(fonts::RULER);
-    let (x_tick0, x_tick1, x_text, align) = if right {
-        (
-            rect.right() - 6.0,
-            rect.right(),
-            rect.right() - 8.0,
-            Align2::RIGHT_CENTER,
-        )
-    } else {
-        (
-            rect.left(),
-            rect.left() + 6.0,
-            rect.left() + 8.0,
-            Align2::LEFT_CENTER,
-        )
-    };
-    let bottom = top + ch_h;
-    // Leave the channel label's corner alone. The right-hand axis has no label
-    // to dodge, so it can carry the 0 dBFS tick right on the strip's edge,
-    // which is where full scale sits at 1x.
-    let y_min = if right { top + 1.0 } else { top + 13.0 };
+    let (x_tick0, x_tick1) = (gut.left(), gut.left() + AXIS_TICK);
+    let x_text = x_tick1 + AXIS_GAP;
+    let (top, bottom) = (gut.top(), gut.bottom());
+    // 0 dBFS sits on the very edge of the strip at 1x, so the range runs to
+    // within a hair of both ends.
+    let y_min = top + 1.0;
     let y_max = bottom - 1.0;
     let mut placed: Vec<f32> = Vec::new();
     for db in STEPS {
@@ -747,14 +931,18 @@ fn draw_db_axis(
                 continue;
             }
             placed.push(y);
-            p.hline(Rangef::new(x_tick0, x_tick1), y, Stroke::new(1.0, DB_AXIS));
+            p.hline(
+                Rangef::new(x_tick0, x_tick1),
+                y,
+                Stroke::new(1.0, DB_AXIS.gamma_multiply(0.65)),
+            );
             // A tick on the very edge would have half its label outside the
             // strip, so the text alone is nudged back inside.
             let ty = y.clamp(top + 7.0, bottom - 7.0);
             p.text(
                 pos2(x_text, ty),
-                align,
-                format!("{db:.0}"),
+                Align2::LEFT_CENTER,
+                format!("{:.0}", db.abs()),
                 font.clone(),
                 DB_AXIS,
             );
@@ -766,8 +954,8 @@ fn draw_db_axis(
     if (y_min..=y_max).contains(&mid) && !placed.iter().any(|&q| (q - mid).abs() < 11.0) {
         p.text(
             pos2(x_text, mid),
-            align,
-            "-inf",
+            Align2::LEFT_CENTER,
+            "inf",
             font.clone(),
             DB_AXIS.gamma_multiply(0.7),
         );
@@ -872,11 +1060,14 @@ fn draw_remapped(
     );
 }
 
-fn draw_spectrogram(app: &mut App, ui: &egui::Ui, p: &egui::Painter, rect: Rect) {
+/// `rect` is the whole strip; `plot` is what is left of it once the axis
+/// gutters are taken off, and is where the image and its labels go.
+fn draw_spectrogram(app: &mut App, ui: &egui::Ui, p: &egui::Painter, rect: Rect, plot: Rect) {
     p.rect_filled(rect, 0.0, Color32::BLACK);
+    paint_gutters(p, rect, plot);
     let Some(audio) = app.audio.clone() else {
         p.text(
-            rect.center(),
+            plot.center(),
             Align2::CENTER_CENTER,
             "Drop an audio file here, or press Ctrl+O",
             FontId::proportional(fonts::HEADING),
@@ -900,13 +1091,32 @@ fn draw_spectrogram(app: &mut App, ui: &egui::Ui, p: &egui::Painter, rect: Rect)
     };
     let ppp = ui.ctx().pixels_per_point();
     // Ask for high-resolution tiles if the zoom has outrun the base hop.
-    app.request_detail((rect.width() * ppp).round() as usize);
+    app.request_detail((plot.width() * ppp).round() as usize);
+    // Merged, the waveform's dB scale has the right-hand gutter, so the
+    // frequencies go down the left. On its own the spectrogram keeps them on
+    // the right, out of the way of the first moments of the clip.
+    let freq_left = merged;
+    // Split, the waveform sits between the ruler and this strip, so the
+    // ruler's corner names that column and not this one: the frequency scale
+    // introduces itself instead.
+    let cap = app.settings.show_waveform && !merged;
 
     for (row, ch) in chans.clone().enumerate() {
         let crect = Rect::from_min_size(
-            pos2(rect.left(), rect.top() + ch_h * row as f32),
-            vec2(rect.width(), ch_h),
+            pos2(plot.left(), plot.top() + ch_h * row as f32),
+            vec2(plot.width(), ch_h),
         );
+        let gut = if freq_left {
+            Rect::from_min_max(
+                pos2(rect.left(), crect.top()),
+                pos2(plot.left(), crect.bottom()),
+            )
+        } else {
+            Rect::from_min_max(
+                pos2(plot.right(), crect.top()),
+                pos2(rect.right(), crect.bottom()),
+            )
+        };
         // A muted channel is dimmed the way its waveform is: the image fades
         // back towards the black behind it, so a soloed channel reads as the
         // only one still speaking.
@@ -1001,7 +1211,17 @@ fn draw_spectrogram(app: &mut App, ui: &egui::Ui, p: &egui::Painter, rect: Rect)
         if let Some((tex, k)) = &app.spec_textures[ch] {
             draw_remapped(p, tex, k, &key, crect, spec_tint);
         }
-        draw_freq_axis(app, p, crect, spec.nyquist(), nch > 1);
+        if gut.width() >= AXIS_TICK {
+            draw_freq_axis(
+                app,
+                p,
+                crect,
+                gut,
+                freq_left,
+                spec.nyquist(),
+                cap && row == 0,
+            );
+        }
         if row > 0 {
             p.hline(
                 rect.x_range(),
@@ -1009,9 +1229,7 @@ fn draw_spectrogram(app: &mut App, ui: &egui::Ui, p: &egui::Painter, rect: Rect)
                 Stroke::new(1.0, Color32::from_gray(60)),
             );
         }
-        // Top left, the same corner the standalone waveform uses: the right
-        // edge belongs to the dB axis, whose 0 dBFS tick sits on the very top
-        // of the strip.
+        // Top left, the same corner the standalone waveform uses.
         if nch > 1 {
             p.text(
                 pos2(crect.left() + 4.0, crect.top() + 2.0),
@@ -1052,9 +1270,20 @@ fn y_to_hz(app: &App, rect: Rect, y: f32, nyquist: f32) -> f32 {
     }
 }
 
-/// `label_corner` is set when a channel label occupies the strip's top-left
-/// corner, so the topmost frequency stays clear of it.
-fn draw_freq_axis(app: &App, p: &egui::Painter, rect: Rect, nyquist: f32, label_corner: bool) {
+/// The frequency scale for one channel. `rect` is the channel's image, which
+/// sets where each frequency falls; `gut` is its column of the gutter, on
+/// whichever side `left` says, and is the only place anything is drawn. `cap`
+/// names the column at the top of it, for when no ruler corner does.
+#[allow(clippy::too_many_arguments)]
+fn draw_freq_axis(
+    app: &App,
+    p: &egui::Painter,
+    rect: Rect,
+    gut: Rect,
+    left: bool,
+    nyquist: f32,
+    cap: bool,
+) {
     let ticks: &[f32] = if app.settings.log_frequency {
         &[
             20.0, 50.0, 100.0, 200.0, 500.0, 1000.0, 2000.0, 5000.0, 10000.0, 20000.0, 40000.0,
@@ -1066,33 +1295,48 @@ fn draw_freq_axis(app: &App, p: &egui::Painter, rect: Rect, nyquist: f32, label_
         ]
     };
     let font = FontId::monospace(fonts::RULER);
+    // Ticks against the image, labels reading outwards from them.
+    let (x_tick0, x_tick1, x_text, align) = if left {
+        (
+            gut.right() - AXIS_TICK,
+            gut.right(),
+            gut.right() - AXIS_TICK - AXIS_GAP,
+            Align2::RIGHT_CENTER,
+        )
+    } else {
+        (
+            gut.left(),
+            gut.left() + AXIS_TICK,
+            gut.left() + AXIS_TICK + AXIS_GAP,
+            Align2::LEFT_CENTER,
+        )
+    };
+    let y_min = if cap {
+        draw_cap(p, gut, Unit::Hz);
+        rect.top() + AXIS_CAP_H + 2.0
+    } else {
+        rect.top() + 6.0
+    };
     let mut last_y = f32::MAX;
     for &hz in ticks {
         if hz >= nyquist || hz < app.settings.min_hz {
             continue;
         }
         let y = hz_to_y(app, rect, hz, nyquist);
-        let y_min = rect.top() + if label_corner { 16.0 } else { 6.0 };
         if (last_y - y).abs() < 12.0 || y < y_min || y > rect.bottom() - 2.0 {
             continue;
         }
         last_y = y;
         p.hline(
-            Rangef::new(rect.left(), rect.left() + 6.0),
+            Rangef::new(x_tick0, x_tick1),
             y,
-            Stroke::new(1.0, Color32::from_gray(180)),
+            Stroke::new(1.0, FREQ_TICK),
         );
-        p.text(
-            pos2(rect.left() + 8.0, y),
-            Align2::LEFT_CENTER,
-            fmt_hz(hz),
-            font.clone(),
-            Color32::from_gray(210),
-        );
+        p.text(pos2(x_text, y), align, fmt_hz(hz), font.clone(), FREQ_TEXT);
     }
 }
 
-fn spectrogram_hover(app: &mut App, pos: Pos2, rect: Rect) {
+fn spectrogram_hover(app: &mut App, pos: Pos2, rect: Rect, plot: Rect) {
     let Some(audio) = &app.audio else {
         return;
     };
@@ -1102,10 +1346,10 @@ fn spectrogram_hover(app: &mut App, pos: Pos2, rect: Rect) {
     let row = (((pos.y - rect.top()) / ch_h) as usize).min(chans.len() - 1);
     let ch = chans.start + row;
     let crect = Rect::from_min_size(
-        pos2(rect.left(), rect.top() + ch_h * row as f32),
-        vec2(rect.width(), ch_h),
+        pos2(plot.left(), plot.top() + ch_h * row as f32),
+        vec2(plot.width(), ch_h),
     );
-    let frame = x_to_frame(&app.view, rect, pos.x);
+    let frame = x_to_frame(&app.view, plot, pos.x);
     let secs = frame / app.sample_rate();
     let Some(spec) = app.spectrograms.get(ch).cloned().flatten() else {
         app.hover_info = fmt_time_field(secs, app.duration_secs());
@@ -1132,22 +1376,24 @@ fn spectrogram_hover(app: &mut App, pos: Pos2, rect: Rect) {
 
 // ---- overlays --------------------------------------------------------------
 
-fn draw_overlays(app: &App, p: &egui::Painter, rect: Rect) {
+/// The playhead, the highlight and the loop edges: drawn across every strip,
+/// but only ever inside `plot`, so the axis gutters stay clean.
+fn draw_overlays(app: &App, p: &egui::Painter, rect: Rect, plot: Rect) {
     if app.audio.is_none() {
         return;
     }
     if let Some((a, b)) = app.selection {
-        let x0 = frame_to_x(&app.view, rect, a.min(b));
-        let x1 = frame_to_x(&app.view, rect, a.max(b));
+        let x0 = frame_to_x(&app.view, plot, a.min(b));
+        let x1 = frame_to_x(&app.view, plot, a.max(b));
         let sel = Rect::from_min_max(
-            pos2(x0.max(rect.left()), rect.top()),
-            pos2(x1.min(rect.right()), rect.bottom()),
+            pos2(x0.max(plot.left()), rect.top()),
+            pos2(x1.min(plot.right()), rect.bottom()),
         );
         if sel.width() > 0.0 {
             p.rect_filled(sel, 0.0, SELECTION);
         }
         for x in [x0, x1] {
-            if x >= rect.left() && x <= rect.right() {
+            if x >= plot.left() && x <= plot.right() {
                 p.vline(x, rect.y_range(), Stroke::new(1.0, SELECTION_EDGE));
             }
         }
@@ -1158,8 +1404,8 @@ fn draw_overlays(app: &App, p: &egui::Painter, rect: Rect) {
         && let Some((a, b)) = app.range
     {
         for f in [a, b] {
-            let x = frame_to_x(&app.view, rect, f);
-            if x >= rect.left() && x <= rect.right() {
+            let x = frame_to_x(&app.view, plot, f);
+            if x >= plot.left() && x <= plot.right() {
                 p.vline(
                     x,
                     rect.y_range(),
@@ -1170,8 +1416,8 @@ fn draw_overlays(app: &App, p: &egui::Painter, rect: Rect) {
     }
     if let Some(engine) = &app.engine {
         let ph = engine.playhead() as f64;
-        let x = frame_to_x(&app.view, rect, ph);
-        if x >= rect.left() && x <= rect.right() {
+        let x = frame_to_x(&app.view, plot, ph);
+        if x >= plot.left() && x <= plot.right() {
             p.vline(x, rect.y_range(), Stroke::new(1.5, PLAYHEAD));
         }
     }
