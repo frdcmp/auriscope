@@ -245,6 +245,15 @@ cargo run -- path/to/file.flac
 
 Debug builds are usable, because `Cargo.toml` compiles dependencies at `opt-level = 3` while keeping your own code at debug settings. Use `--release` for benchmarking and for anything you intend to ship, and expect a few minutes, since that profile uses fat LTO with one codegen unit.
 
+For an edit-and-look loop, [`dev.sh`](dev.sh) rebuilds and restarts on every save — about 1.5 s for a UI change:
+
+```bash
+./dev.sh                     # reopens the file you had last
+./dev.sh path/to/file.wav
+```
+
+Rust has no practical hot reload, so this restarts the process, which costs little: settings and the last file persist, so the app returns to the same file, colour map and zoom. A failed build leaves the running window alone, so you keep the last version that worked on screen while you fix the error. It uses `inotifywait` when `inotify-tools` is installed and otherwise polls, so it needs nothing installed; `cargo watch -x run` does the same job.
+
 <details>
 <summary><b>Running the newest <code>main</code>, dev build stamps and Arch packaging</b></summary>
 
