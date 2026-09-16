@@ -315,11 +315,41 @@ AURISCOPE_THREADS=1 cargo run --release --example bench_spec -- file.wav   # for
 
 ---
 
-## 📦 Packaging notes
+## 📦 Packaging
 
-*   **Flathub** requires an app ID under a domain you control. `auriscope.com` is not ours, so the ID is `io.github.frdcmp.Auriscope`. Still needs a metainfo file and offline cargo sources generated with `flatpak-cargo-generator`.
-*   **Windows** already sets `#![windows_subsystem = "windows"]` to hide the console; it still needs an icon resource and optional file associations for double-click open.
-*   **CI** builds and tests on `ubuntu-latest` and `windows-latest` on every push, so the platform you are not sitting at cannot rot silently.
+Everything a distribution needs lives in the repo: the desktop entry and AppStream metainfo in `assets/`, and the recipes under `packaging/`. All of them build from a version tag, so **tag first** (`git tag v0.1.0 && git push --tags`); the release workflow then attaches Linux and Windows archives to the GitHub release.
+
+### Flatpak / Flathub
+
+`packaging/flatpak/io.github.frdcmp.Auriscope.yml` builds against the freedesktop 24.08 runtime with the Rust SDK extension. Flathub builds offline, so every crate in `Cargo.lock` is listed in `cargo-sources.json`; regenerate it whenever the lockfile changes:
+
+```bash
+python3 packaging/flatpak/gen-cargo-sources.py Cargo.lock -o packaging/flatpak/cargo-sources.json
+```
+
+The Flatpak build uses `--features portal`, which routes the Open dialog through the XDG file-chooser portal instead of GTK, so the sandbox needs no filesystem permission: `--socket=wayland`, `--socket=fallback-x11`, `--device=dri` for wgpu and `--socket=pulseaudio` for cpal are the whole list. Build and try it locally:
+
+```bash
+flatpak install flathub org.freedesktop.Sdk//24.08 org.freedesktop.Sdk.Extension.rust-stable//24.08
+flatpak-builder --user --install --force-clean build-dir packaging/flatpak/io.github.frdcmp.Auriscope.yml
+flatpak run io.github.frdcmp.Auriscope file.wav
+```
+
+To submit: set `tag` and `commit` in the manifest, fork `flathub/flathub`, branch from `new-pr`, add the manifest and `cargo-sources.json`, open a pull request. The app ID is under `io.github.frdcmp`, so Flathub can verify ownership through GitHub.
+
+### Arch Linux
+
+`packaging/arch/auriscope/PKGBUILD` builds the tagged release tarball; `packaging/arch/auriscope-git/PKGBUILD` builds `main` and works without any release or AUR account:
+
+```bash
+cd packaging/arch/auriscope-git && makepkg -si
+```
+
+Publishing the release package to the AUR: `updpkgsums`, `makepkg --printsrcinfo > .SRCINFO`, then push `PKGBUILD` and `.SRCINFO` to `ssh://aur@aur.archlinux.org/auriscope.git`.
+
+### Windows
+
+`#![windows_subsystem = "windows"]` hides the console and the release workflow ships a zip. Still missing: an icon resource and file associations for double-click open.
 
 ---
 

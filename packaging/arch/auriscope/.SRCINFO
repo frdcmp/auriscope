@@ -1,0 +1,21 @@
+pkgbase = auriscope
+	pkgdesc = Audio player and analyser: waveform, spectrogram, spectrum, loudness
+	pkgver = 0.1.0
+	pkgrel = 1
+	url = https://github.com/frdcmp/auriscope
+	arch = x86_64
+	arch = aarch64
+	license = GPL-3.0-or-later
+	license = OFL-1.1
+	makedepends = cargo
+	depends = alsa-lib
+	depends = libxkbcommon
+	depends = wayland
+	depends = gtk3
+	depends = gcc-libs
+	depends = glibc
+	optdepends = vulkan-driver: GPU rendering through wgpu
+	source = auriscope-0.1.0.tar.gz::https://github.com/frdcmp/auriscope/archive/refs/tags/v0.1.0.tar.gz
+	sha256sums = SKIP
+
+pkgname = auriscope

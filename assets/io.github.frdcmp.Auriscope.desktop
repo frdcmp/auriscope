@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=Auriscope
+GenericName=Audio Player and Analyser
+Comment=Play a file and see it: waveform, spectrogram, spectrum
+Exec=auriscope %f
+Icon=io.github.frdcmp.Auriscope
+Terminal=false
+StartupNotify=true
+Categories=AudioVideo;Audio;Player;
+Keywords=audio;spectrogram;waveform;spectrum;loudness;LUFS;player;analyser;
+MimeType=audio/wav;audio/x-wav;audio/vnd.wave;audio/flac;audio/x-flac;audio/mpeg;audio/mp4;audio/aac;audio/ogg;audio/x-vorbis+ogg;audio/x-aiff;audio/x-caf;audio/x-ape;audio/x-m4a;audio/x-matroska;

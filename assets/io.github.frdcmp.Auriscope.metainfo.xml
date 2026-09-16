@@ -1,0 +1,86 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>io.github.frdcmp.Auriscope</id>
+  <name>Auriscope</name>
+  <summary>Play a file and see it: waveform, spectrogram, spectrum</summary>
+  <developer id="io.github.frdcmp">
+    <name>Francesco De Campo</name>
+  </developer>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>GPL-3.0-or-later</project_license>
+
+  <description>
+    <p>
+      Auriscope is a read-only audio player and analyser. Open a file and it
+      shows the waveform, a whole-file spectrogram and a live spectrum, with
+      loudness and level measurements alongside.
+    </p>
+    <p>Features:</p>
+    <ul>
+      <li>Waveform with min/max envelope, RMS overlay, dB scale and up to 4096x vertical zoom</li>
+      <li>Whole-file spectrogram that refines itself as you zoom, with optional time-frequency reassignment for razor-thin harmonics</li>
+      <li>Palettes: Amber, Ember, Magma, Inferno, Viridis, Plasma, Turbo, Grey and a custom three-colour gradient</li>
+      <li>Merged view: the waveform drawn over the spectrogram, each with its own opacity</li>
+      <li>Realtime spectrum analyser during playback</li>
+      <li>Integrated, short-term and momentary loudness, loudness range, sample and true peak, RMS, DC offset, clipping count</li>
+      <li>RIFF/WAVE header inspector: chunks, Broadcast Wave metadata, INFO tags and cue markers</li>
+      <li>Loop ranges on the time ruler with draggable handles</li>
+      <li>Decodes WAV, AIFF, CAF, FLAC, ALAC, APE, MP3, AAC, Vorbis, Opus in Ogg, MP4 and Matroska containers</li>
+    </ul>
+    <p>
+      Auriscope never writes to your files.
+    </p>
+  </description>
+
+  <launchable type="desktop-id">io.github.frdcmp.Auriscope.desktop</launchable>
+  <provides>
+    <binary>auriscope</binary>
+  </provides>
+
+  <screenshots>
+    <screenshot type="default">
+      <image>https://raw.githubusercontent.com/frdcmp/auriscope/main/assets/screenshot.png</image>
+      <caption>A log sweep and a tone, with the clipped region flagged in red</caption>
+    </screenshot>
+  </screenshots>
+
+  <url type="homepage">https://github.com/frdcmp/auriscope</url>
+  <url type="bugtracker">https://github.com/frdcmp/auriscope/issues</url>
+  <url type="vcs-browser">https://github.com/frdcmp/auriscope</url>
+
+  <categories>
+    <category>AudioVideo</category>
+    <category>Audio</category>
+    <category>Player</category>
+  </categories>
+  <keywords>
+    <keyword>audio</keyword>
+    <keyword>spectrogram</keyword>
+    <keyword>waveform</keyword>
+    <keyword>loudness</keyword>
+    <keyword>LUFS</keyword>
+  </keywords>
+
+  <branding>
+    <color type="primary" scheme_preference="light">#f7c648</color>
+    <color type="primary" scheme_preference="dark">#1c2b52</color>
+  </branding>
+
+  <requires>
+    <display_length compare="ge">768</display_length>
+  </requires>
+  <supports>
+    <control>pointing</control>
+    <control>keyboard</control>
+  </supports>
+
+  <content_rating type="oars-1.1" />
+
+  <releases>
+    <release version="0.1.0" date="2026-09-16">
+      <description>
+        <p>First release.</p>
+      </description>
+    </release>
+  </releases>
+</component>

@@ -41,5 +41,9 @@ jobs:
       - name: Build
         run: cargo build
 
+      - name: Check the portal file-dialog feature (Flatpak build)
+        if: runner.os == 'Linux'
+        run: cargo check --no-default-features --features portal
+
       - name: Test
         run: cargo test

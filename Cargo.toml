@@ -29,7 +29,10 @@ rubato = "5.0"
 rtrb = "0.4"
 ebur128 = "0.1"
 colorous = "1.0"
-rfd = "0.17"
+# File dialogs. `gtk` (default) opens a native GTK dialog; `portal` goes
+# through the XDG desktop portal instead and is what the Flatpak build uses,
+# so the sandbox needs no filesystem permission.
+rfd = { version = "0.17", default-features = false }
 anyhow = "1.0"
 log = "0.4"
 env_logger = "0.11"
@@ -37,6 +40,11 @@ serde = { version = "1.0", features = ["derive"] }
 
 # Dependencies at full optimisation even in debug builds. This is what makes
 # `cargo run` usable: FFT, decoding and resampling live in dependencies.
+[features]
+default = ["gtk"]
+gtk = ["rfd/gtk3"]
+portal = ["rfd/xdg-portal", "rfd/pollster"]
+
 [profile.dev.package."*"]
 opt-level = 3
 
