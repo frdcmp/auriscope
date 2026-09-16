@@ -11,8 +11,10 @@
   [![Rust](https://img.shields.io/badge/Rust-1.98+-3a4150.svg?logo=rust&logoColor=white&style=flat-square)](https://www.rust-lang.org/)
   [![GUI](https://img.shields.io/badge/GUI-egui_0.36_%2F_wgpu-5b1878.svg?style=flat-square)](https://github.com/emilk/egui)
   [![Decoding](https://img.shields.io/badge/Decode-Symphonia_0.6-9c2a6f.svg?style=flat-square)](https://github.com/pdeljanov/Symphonia)
-  [![Platform](https://img.shields.io/badge/Platform-Linux_%7C_Windows-2b2b35.svg?style=flat-square)](#-quick-start)
+  [![Platform](https://img.shields.io/badge/Platform-Linux_%7C_Windows-2b2b35.svg?style=flat-square)](#-install)
   ![Status](https://img.shields.io/badge/Status-M1--M4_complete-3fa46a.svg?style=flat-square)
+
+  **[⬇ Download the latest release](https://github.com/frdcmp/auriscope/releases/latest)** — Windows `.zip` and Linux `.tar.gz`
 </div>
 
 > An auriscope is the instrument a doctor uses to look inside the ear.
@@ -45,7 +47,20 @@ curl -fsSL https://raw.githubusercontent.com/frdcmp/auriscope/main/install.sh | 
 irm https://raw.githubusercontent.com/frdcmp/auriscope/main/install.ps1 | iex
 ```
 
-Both take the latest release, verify its SHA-256 and install for the current user only: on Linux into `~/.local`, on Windows into `%LOCALAPPDATA%\Programs\Auriscope`. Both register the app properly — a desktop entry, icons and AppStream metainfo so it appears in your launcher and in "Open With" on Linux; a Start Menu shortcut and a `PATH` entry on Windows.
+### Or download it by hand
+
+Every release carries a **Windows `.zip`** and a **Linux `.tar.gz`**, each with a `.sha256` beside it:
+
+| | |
+| :--- | :--- |
+| 🪟 **Windows** | **[Latest release ⬇](https://github.com/frdcmp/auriscope/releases/latest)** — take `auriscope-<version>-x86_64-windows.zip`, unzip it anywhere and run `auriscope.exe`. Nothing to install, no admin. Windows may warn that the publisher is unknown, since the binary is not code-signed: choose *More info → Run anyway*. |
+| 🐧 **Linux** | **[Latest release ⬇](https://github.com/frdcmp/auriscope/releases/latest)** — take `auriscope-<version>-x86_64-linux.tar.gz`, unpack it and run `./auriscope`. |
+
+The app tells you when a newer release is out, so a hand-installed copy is not a dead end.
+
+### What the scripts do
+
+They take the latest release, verify its SHA-256 and install for the current user only: on Linux into `~/.local`, on Windows into `%LOCALAPPDATA%\Programs\Auriscope`. Both register the app properly — a desktop entry, icons and AppStream metainfo so it appears in your launcher and in "Open With" on Linux; a Start Menu shortcut and a `PATH` entry on Windows.
 
 ### Updating
 
