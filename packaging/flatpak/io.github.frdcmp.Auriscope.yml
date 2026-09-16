@@ -58,5 +58,5 @@ modules:
         url: https://github.com/frdcmp/auriscope.git
         tag: v0.1.0
         # `git rev-parse v0.1.0`
-        commit: f888d394b1529820ad653696a0d8fa352ab379eb
+        commit: 43e95a476a3c0e2324f2b9a8f61a052458230667
       - cargo-sources.json
