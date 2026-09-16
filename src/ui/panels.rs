@@ -1525,18 +1525,16 @@ fn spectrogram_card(app: &mut App, ui: &mut egui::Ui) {
                 },
             );
             setting(ui, "Overlap", "", |ui| {
+                let mut overlap = (stft.overlap_num, stft.overlap_den);
                 combo("overlap")
                     .selected_text(stft.overlap_label())
                     .show_ui(ui, |ui| {
                         for (n, d) in [(0u8, 1u8), (1, 2), (3, 4), (7, 8)] {
                             let label = format!("{}%", 100 * n as u32 / d as u32);
-                            ui.selectable_value(
-                                &mut (stft.overlap_num, stft.overlap_den),
-                                (n, d),
-                                label,
-                            );
+                            ui.selectable_value(&mut overlap, (n, d), label);
                         }
                     });
+                (stft.overlap_num, stft.overlap_den) = overlap;
             });
             setting(ui, "Window", "", |ui| {
                 combo("win-kind")
