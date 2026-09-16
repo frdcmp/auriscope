@@ -16,7 +16,7 @@ use eframe::egui;
 use egui::{Color32, Id, Rect, RectAlign, RichText, Stroke, Ui};
 
 use super::fonts;
-use super::panels::{ACCENT, CARD_BG, VAL};
+use super::panels::theme::{ACCENT, CARD_BG, VAL};
 
 /// Width of a popover. Wide enough for a sentence to breathe, narrow enough
 /// that it never blankets the panel it is explaining.

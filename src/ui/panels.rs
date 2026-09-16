@@ -19,8 +19,10 @@ use super::views::{V_ZOOM_MAX, V_ZOOM_MIN, channel_name};
 use super::{App, RECENT_MAX};
 
 mod chrome;
+pub(super) mod theme;
 
 pub use chrome::{resize_borders, title_bar};
+use theme::{ACCENT, BAD, CARD_BG, GOOD, KEY, VAL, WARN};
 
 /// Height of the transport bar's widget row. egui otherwise assumes a row is
 /// `interact_size.y` tall and centres small widgets in that band, while taller
@@ -605,17 +607,10 @@ pub fn side_panel(app: &mut App, root: &mut egui::Ui) {
 // ---- Sidebar styling -------------------------------------------------------
 
 const SIDE_BG: Color32 = Color32::from_rgb(22, 23, 26);
-pub(super) const CARD_BG: Color32 = Color32::from_rgb(31, 32, 36);
-pub(super) const ACCENT: Color32 = Color32::from_rgb(86, 156, 214);
-pub(super) const KEY: Color32 = Color32::from_gray(140);
 /// Section headings inside a card: quieter than a value, weightier than a key.
 const SUBHEAD: Color32 = Color32::from_gray(128);
 /// The rule a section heading trails, a shade above the card it sits on.
 const SUBHEAD_RULE: Color32 = Color32::from_gray(58);
-pub(super) const VAL: Color32 = Color32::from_gray(228);
-const GOOD: Color32 = Color32::from_rgb(120, 200, 130);
-const WARN: Color32 = Color32::from_rgb(247, 198, 72);
-const BAD: Color32 = Color32::from_rgb(255, 110, 110);
 
 /// Card padding: tight in the side panel, which is a narrow column, and roomier
 /// in the settings dialog, which has the width to breathe.
