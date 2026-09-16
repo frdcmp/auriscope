@@ -614,7 +614,7 @@ fn card(
     trailing: Option<String>,
     body: impl FnOnce(&mut egui::Ui),
 ) {
-    card_with(ui, CARD_PAD, icon, title, trailing, body);
+    card_with(ui, false, icon, title, trailing, body);
 }
 
 /// The same card with the settings dialog's roomier padding.
@@ -625,22 +625,21 @@ fn wide_card(
     trailing: Option<String>,
     body: impl FnOnce(&mut egui::Ui),
 ) {
-    card_with(ui, CARD_PAD_WIDE, icon, title, trailing, body);
+    card_with(ui, true, icon, title, trailing, body);
 }
 
 fn card_with(
     ui: &mut egui::Ui,
-    pad: Margin,
+    roomy: bool,
     icon: &str,
     title: &str,
     trailing: Option<String>,
     body: impl FnOnce(&mut egui::Ui),
 ) {
-    let roomy = pad == CARD_PAD_WIDE;
     egui::Frame::new()
         .fill(CARD_BG)
         .corner_radius(6.0)
-        .inner_margin(pad)
+        .inner_margin(if roomy { CARD_PAD_WIDE } else { CARD_PAD })
         .show(ui, |ui| {
             ui.set_width(ui.available_width());
             ui.spacing_mut().item_spacing.y = if roomy { 6.0 } else { 4.0 };
