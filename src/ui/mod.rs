@@ -28,6 +28,10 @@ use auriscope::audio::{DecodedAudio, Engine, decode_file};
 /// Default waveform colour: the blue the app has always drawn.
 pub const DEFAULT_WAVE_COLOR: [u8; 3] = [86, 156, 214];
 
+/// How many files the history keeps. Long enough to cover a session's worth of
+/// takes, short enough that the menu stays a menu.
+pub const RECENT_MAX: usize = 12;
+
 /// Everything that survives a restart.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
@@ -65,6 +69,11 @@ pub struct Settings {
     pub follow_playhead: bool,
     pub show_rms: bool,
     pub last_file: Option<PathBuf>,
+    /// Keep a history of the files opened, and reopen the newest of them at
+    /// startup. Off means nothing about opened files is written to disk.
+    pub remember_recent: bool,
+    /// The history itself, newest first, at most [`RECENT_MAX`] long.
+    pub recent_files: Vec<PathBuf>,
     /// Look for a newer release on GitHub at startup (`update-check` builds).
     pub check_updates: bool,
     /// When the last automatic check ran, in seconds since the Unix epoch.
@@ -101,10 +110,44 @@ impl Default for Settings {
             follow_playhead: true,
             show_rms: true,
             last_file: None,
+            remember_recent: true,
+            recent_files: Vec::new(),
             check_updates: true,
             update_last_check: 0,
             update_skipped: None,
         }
+    }
+}
+
+impl Settings {
+    /// Put `path` at the head of the history and make it the file to reopen
+    /// next time. A no-op while the history is switched off, which is what
+    /// keeps that setting a real one: nothing about the file is written.
+    fn remember_file(&mut self, path: &Path) {
+        if !self.remember_recent {
+            return;
+        }
+        self.last_file = Some(path.to_path_buf());
+        let recent = &mut self.recent_files;
+        // Reopening a file moves it to the top rather than duplicating it.
+        recent.retain(|p| p != path);
+        recent.insert(0, path.to_path_buf());
+        recent.truncate(RECENT_MAX);
+    }
+
+    /// Drop one file from the history.
+    fn forget_file(&mut self, path: &Path) {
+        self.recent_files.retain(|p| p != path);
+        if self.last_file.as_deref() == Some(path) {
+            self.last_file = None;
+        }
+    }
+
+    /// Forget every file opened so far, including the one that would reopen
+    /// at startup.
+    fn clear_recent(&mut self) {
+        self.recent_files.clear();
+        self.last_file = None;
     }
 }
 
@@ -525,7 +568,7 @@ impl App {
                 }
                 Msg::Progress(p) => job.progress = p,
                 Msg::Decoded(audio) => {
-                    self.settings.last_file = Some(audio.info.path.clone());
+                    self.settings.remember_file(&audio.info.path);
                     self.title = format!("{} — Auriscope", audio.info.file_name());
                     ctx.send_viewport_cmd(egui::ViewportCommand::Title(self.title.clone()));
                     self.view = View {
@@ -1053,5 +1096,66 @@ fn spectrogram_pass(
             }
             None => return,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn opened(paths: &[&str]) -> Settings {
+        let mut s = Settings::default();
+        for p in paths {
+            s.remember_file(Path::new(p));
+        }
+        s
+    }
+
+    #[test]
+    fn history_is_newest_first_and_holds_each_file_once() {
+        // Reopening a file moves it up rather than adding a second row.
+        let s = opened(&["/a.wav", "/b.wav", "/a.wav"]);
+        assert_eq!(
+            s.recent_files,
+            vec![PathBuf::from("/a.wav"), PathBuf::from("/b.wav")]
+        );
+        assert_eq!(s.last_file, Some(PathBuf::from("/a.wav")));
+    }
+
+    #[test]
+    fn history_drops_the_oldest_past_the_cap() {
+        let names: Vec<String> = (0..RECENT_MAX + 3).map(|i| format!("/{i}.wav")).collect();
+        let s = opened(&names.iter().map(String::as_str).collect::<Vec<_>>());
+        assert_eq!(s.recent_files.len(), RECENT_MAX);
+        assert_eq!(
+            s.recent_files[0],
+            PathBuf::from(format!("/{}.wav", RECENT_MAX + 2))
+        );
+        assert!(!s.recent_files.contains(&PathBuf::from("/0.wav")));
+    }
+
+    #[test]
+    fn history_off_records_nothing_at_all() {
+        // Including the file to reopen at startup: switching it off has to
+        // mean the app forgets, not that it hides what it kept.
+        let mut s = Settings {
+            remember_recent: false,
+            ..Settings::default()
+        };
+        s.remember_file(Path::new("/a.wav"));
+        assert!(s.recent_files.is_empty());
+        assert_eq!(s.last_file, None);
+    }
+
+    #[test]
+    fn clearing_forgets_the_startup_file_too() {
+        let mut s = opened(&["/a.wav", "/b.wav"]);
+        s.forget_file(Path::new("/b.wav"));
+        assert_eq!(s.recent_files, vec![PathBuf::from("/a.wav")]);
+        // /b.wav was the newest, so it was also the one to reopen.
+        assert_eq!(s.last_file, None);
+        s.clear_recent();
+        assert!(s.recent_files.is_empty());
+        assert_eq!(s.last_file, None);
     }
 }

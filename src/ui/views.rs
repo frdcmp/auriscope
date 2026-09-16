@@ -551,30 +551,34 @@ fn draw_waveform(app: &App, p: &egui::Painter, rect: Rect, overlay: Option<f32>)
     let width = rect.width().max(1.0) as usize;
     let show_rms = app.settings.show_rms;
     let vz = app.settings.wave_v_zoom;
+    // Zoomed in far enough that a pixel spans only a few samples: draw the
+    // actual signal, a polyline through every sample (Sound Forge/Praat
+    // style), instead of the min/max envelope.
+    let spp = app.view.len() / width.max(1) as f64;
+    let per_sample = spp <= 4.0;
 
     for ch in 0..nch {
         let top = rect.top() + ch_h * ch as f32;
         let mid = top + ch_h / 2.0;
         let half = ch_h / 2.0 - 2.0;
-        if over {
-            p.hline(
-                rect.x_range(),
-                mid,
-                Stroke::new(1.0, Color32::from_white_alpha(28)),
-            );
+        // The zero line (-inf dBFS). Under the envelope, where it only has
+        // to show through the gaps; brighter and dashed over the per-sample
+        // trace, which is a hairline of the same weight and would otherwise
+        // be indistinguishable from it.
+        let zero_c = if over {
+            Color32::from_white_alpha(if per_sample { 64 } else { 28 })
         } else {
+            Color32::from_gray(if per_sample { 78 } else { 50 })
+        };
+        if !per_sample {
+            p.hline(rect.x_range(), mid, Stroke::new(1.0, zero_c));
+        }
+        if !over && ch > 0 {
             p.hline(
                 rect.x_range(),
-                mid,
-                Stroke::new(1.0, Color32::from_gray(50)),
+                top,
+                Stroke::new(1.0, Color32::from_gray(40)),
             );
-            if ch > 0 {
-                p.hline(
-                    rect.x_range(),
-                    top,
-                    Stroke::new(1.0, Color32::from_gray(40)),
-                );
-            }
         }
         let muted = match app.solo {
             Some(s) => s != ch,
@@ -594,11 +598,7 @@ fn draw_waveform(app: &App, p: &egui::Painter, rect: Rect, overlay: Option<f32>)
         });
         let clip_c = tint(CLIP);
         let clip_rms_c = tint(CLIP_RMS);
-        // Zoomed in far enough that a pixel spans only a few samples: draw
-        // the actual signal, a polyline through every sample (Sound
-        // Forge/Praat style), instead of the min/max envelope.
-        let spp = app.view.len() / width.max(1) as f64;
-        if spp <= 4.0 {
+        if per_sample {
             let samples = &audio.channels[ch];
             let a = app.view.start.floor().max(0.0) as usize;
             let b = (app.view.end.ceil().max(0.0) as usize).min(samples.len());
@@ -635,6 +635,14 @@ fn draw_waveform(app: &App, p: &egui::Painter, rect: Rect, overlay: Option<f32>)
                     p.vline(x, Rangef::new(mid - r, mid + r), Stroke::new(1.0, c));
                 }
             }
+        }
+        if per_sample {
+            p.extend(egui::Shape::dashed_line(
+                &[pos2(rect.left(), mid), pos2(rect.right(), mid)],
+                Stroke::new(1.0, zero_c),
+                5.0,
+                4.0,
+            ));
         }
         if app.settings.show_db_scale {
             draw_db_axis(p, rect, top, ch_h, mid, half, vz, over);

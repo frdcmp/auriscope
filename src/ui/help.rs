@@ -251,6 +251,7 @@ pub enum Topic {
     SpectrogramCard,
     WaveformCard,
     SpectrumCard,
+    FilesCard,
     KeysCard,
     AboutCard,
 
@@ -281,6 +282,9 @@ pub enum Topic {
     // ---- settings: spectrum --------------------------------------------
     SpectrumSize,
     SpectrumAveraging,
+
+    // ---- settings: files -----------------------------------------------
+    RememberFiles,
 }
 
 impl Topic {
@@ -293,7 +297,8 @@ impl Topic {
                 "File",
                 "What the decoder found: the container it opened, the codec inside, and the \
                  shape of the audio once decoded. Everything below is read from the file, not \
-                 measured from the sound.",
+                 measured from the sound. Click the folder line under the name to show the file \
+                 in your file manager.",
             ),
             T::WaveHeaderCard => (
                 "WAVE header",
@@ -665,6 +670,12 @@ impl Topic {
                 "The frequency content of whatever is playing right now, updated live. A slice \
                  through the spectrogram at the playhead, read as a graph.",
             ),
+            T::FilesCard => (
+                "Files",
+                "What the app remembers about the files you open: the history behind the \
+                 Recent menu, and which file it reopens when it starts. All of it is kept on \
+                 this machine and nothing is sent anywhere.",
+            ),
             T::KeysCard => (
                 "Keys",
                 "Every keyboard and mouse shortcut. F1 toggles the help mode you are reading \
@@ -799,6 +810,14 @@ impl Topic {
                  display and makes steady tones easy to read; lower reacts instantly but \
                  flickers.",
             ),
+
+            // ---- settings: files ---------------------------------------
+            T::RememberFiles => (
+                "History",
+                "Keeps the files you open in a list, newest first, so the Recent menu can \
+                 reopen them and the app can pick up where you left off. Switch it off and the \
+                 list is cleared and nothing further is recorded — the app then starts empty.",
+            ),
         }
     }
 }
@@ -905,6 +924,7 @@ mod tests {
         Topic::SpectrogramCard,
         Topic::WaveformCard,
         Topic::SpectrumCard,
+        Topic::FilesCard,
         Topic::KeysCard,
         Topic::AboutCard,
         Topic::ShowPanes,
@@ -927,5 +947,6 @@ mod tests {
         Topic::WaveHeight,
         Topic::SpectrumSize,
         Topic::SpectrumAveraging,
+        Topic::RememberFiles,
     ];
 }

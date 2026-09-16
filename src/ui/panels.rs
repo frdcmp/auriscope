@@ -8,13 +8,13 @@ use egui::{
 
 use auriscope::analysis::{ColorMap, StftParams, WindowKind, db_to_amp};
 
-use super::App;
 use super::fonts;
 use super::help::{self, Topic};
 use super::icon;
 use super::update;
-use super::util::{fmt_time, fmt_time_field};
+use super::util::{fmt_time, fmt_time_field, reveal};
 use super::views::{V_ZOOM_MAX, V_ZOOM_MIN, channel_label};
+use super::{App, RECENT_MAX};
 
 const TITLEBAR_BG: Color32 = Color32::from_rgb(30, 30, 36);
 const CLOSE_HOVER: Color32 = Color32::from_rgb(224, 27, 36);
@@ -266,6 +266,7 @@ pub fn top_bar(app: &mut App, root: &mut egui::Ui) {
             if ui.button("Open…").on_hover_text("Ctrl+O").clicked() {
                 app.pick_file();
             }
+            recent_menu(app, ui);
             ui.separator();
 
             let has = app.engine.is_some();
@@ -383,6 +384,68 @@ pub fn top_bar(app: &mut App, root: &mut egui::Ui) {
 
 /// "0.2.0 available" in the transport bar, with a skip button. Shown only
 /// while a newer release is known and the user has not dismissed it.
+/// Width the history menu opens at, so a run of file names reads as a column
+/// rather than a ragged edge.
+const RECENT_MENU_W: f32 = 260.0;
+
+/// The history menu beside "Open…": every file opened before, newest first.
+///
+/// Disabled rather than hidden when there is nothing in it, so the bar keeps
+/// its shape from the first launch onwards.
+fn recent_menu(app: &mut App, ui: &mut egui::Ui) {
+    let empty = app.settings.recent_files.is_empty();
+    ui.add_enabled_ui(!empty, |ui| {
+        let resp = ui
+            .menu_button("Recent", |ui| {
+                ui.set_min_width(RECENT_MENU_W);
+                // Cloned because opening a file borrows the whole app, and the
+                // list it would be iterating lives inside it.
+                let recent = app.settings.recent_files.clone();
+                let mut open = None;
+                for path in &recent {
+                    // A stat per entry, but only while the menu is open: a file
+                    // moved or deleted since should not look openable.
+                    let here = path.is_file();
+                    let name = file_label(path);
+                    let text = RichText::new(name).color(if here { VAL } else { KEY });
+                    let resp = ui
+                        .add_enabled(here, egui::Button::new(text).truncate())
+                        .on_hover_text(path.display().to_string())
+                        .on_disabled_hover_text(format!(
+                            "{} — not there any more.",
+                            path.display()
+                        ));
+                    if resp.clicked() {
+                        open = Some(path.clone());
+                        ui.close();
+                    }
+                }
+                ui.separator();
+                if ui.button("Clear history").clicked() {
+                    app.settings.clear_recent();
+                    ui.close();
+                }
+                if let Some(path) = open {
+                    app.open(&path);
+                }
+            })
+            .response;
+        if empty {
+            resp.on_disabled_hover_text("No files opened yet.");
+        } else {
+            resp.on_hover_text("Files opened before, newest first");
+        }
+    });
+}
+
+/// A file's name for a one-line row, falling back to the whole path for the
+/// odd path that has no final component.
+fn file_label(path: &std::path::Path) -> String {
+    path.file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| path.display().to_string())
+}
+
 fn update_notice(app: &mut App, ui: &mut egui::Ui) {
     let Some(release) = app
         .updater
@@ -1134,7 +1197,19 @@ fn file_card(app: &App, ui: &mut egui::Ui) {
             .on_hover_text(info.path.display().to_string());
             // Wrapped, not truncated: a deep path is worth two lines, and the
             // hover tooltip was the only way to read the tail of a cut one.
-            ui.add(egui::Label::new(RichText::new(info.directory()).small().color(KEY)).wrap());
+            // Clicking it hands the file to the desktop's file manager, which
+            // is where a path on screen usually wants to be followed.
+            let dir = ui
+                .add(
+                    egui::Label::new(RichText::new(info.directory()).small().color(KEY))
+                        .wrap()
+                        .sense(Sense::click()),
+                )
+                .on_hover_text("Show in the file manager")
+                .on_hover_cursor(egui::CursorIcon::PointingHand);
+            if dir.clicked() {
+                reveal(&info.path);
+            }
             ui.add_space(2.0);
             let layout = match info.channels {
                 1 => "mono".to_string(),
@@ -1394,9 +1469,9 @@ fn loudness_card(app: &App, ui: &mut egui::Ui) {
             subhead(ui, "Against targets", Topic::AgainstTargets);
             kv_rows(ui, |rows| {
                 for (name, target) in [
-                    ("EBU R128 · −23", -23.0f32),
-                    ("Podcast · −16", -16.0),
-                    ("Streaming · −14", -14.0),
+                    ("EBU R128 −23 LUFS", -23.0f32),
+                    ("Podcast −16 LUFS", -16.0),
+                    ("Streaming −14 LUFS", -14.0),
                 ] {
                     let d = stats.integrated_lufs - target;
                     let color = if d.abs() <= 1.0 {
@@ -1702,6 +1777,7 @@ pub fn settings_window(app: &mut App, ctx: &egui::Context) {
                 spectrogram_card(app, ui);
                 waveform_card(app, ui);
                 spectrum_card(app, ui);
+                files_card(app, ui);
                 keys_card(ui);
                 about_card(app, ui);
             });
@@ -2092,6 +2168,117 @@ fn spectrum_card(app: &mut App, ui: &mut egui::Ui) {
                 if let Some(e) = &app.engine {
                     app.live = Some(auriscope::analysis::LiveSpectrum::new(size, e.device_rate));
                 }
+            }
+        },
+    );
+}
+
+/// Height the history list scrolls at: about six rows, so a full history is
+/// reachable without the card growing past the cards around it.
+const RECENT_LIST_H: f32 = 132.0;
+
+fn files_card(app: &mut App, ui: &mut egui::Ui) {
+    wide_card(
+        ui,
+        fonts::icon::CLOCK,
+        "Files",
+        Topic::FilesCard,
+        None,
+        |ui| {
+            settings_grid(ui, "files-grid", |ui| {
+                setting(ui, "History", Some(Topic::RememberFiles), |ui| {
+                    let mut on = app.settings.remember_recent;
+                    if ui.checkbox(&mut on, "Remember the files I open").changed() {
+                        app.settings.remember_recent = on;
+                        // Switching it off is a request to forget, not just to
+                        // stop recording: leaving the old list behind would
+                        // make the setting a half-truth.
+                        if !on {
+                            app.settings.clear_recent();
+                        }
+                    }
+                });
+            });
+            ui.add_space(2.0);
+            if !app.settings.remember_recent {
+                ui.label(
+                    RichText::new(
+                        "Nothing is kept: no history, and the app starts empty rather than \
+                         reopening the last file.",
+                    )
+                    .small()
+                    .color(KEY),
+                );
+                return;
+            }
+            let recent = app.settings.recent_files.clone();
+            ui.horizontal(|ui| {
+                ui.label(
+                    RichText::new(format!(
+                        "{} of {RECENT_MAX} remembered, newest first",
+                        recent.len()
+                    ))
+                    .small()
+                    .color(KEY),
+                );
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    if ui
+                        .add_enabled(!recent.is_empty(), egui::Button::new("Clear history"))
+                        .clicked()
+                    {
+                        app.settings.clear_recent();
+                    }
+                });
+            });
+            if recent.is_empty() {
+                return;
+            }
+            ui.add_space(4.0);
+            let mut forget = None;
+            let mut open = None;
+            egui::ScrollArea::vertical()
+                .max_height(RECENT_LIST_H)
+                .auto_shrink([false, true])
+                .show(ui, |ui| {
+                    for path in &recent {
+                        let here = path.is_file();
+                        ui.horizontal(|ui| {
+                            if ui
+                                .small_button("✕")
+                                .on_hover_text("Forget this one")
+                                .clicked()
+                            {
+                                forget = Some(path.clone());
+                            }
+                            let label = RichText::new(file_label(path))
+                                .color(if here { VAL } else { KEY })
+                                .size(fonts::BODY);
+                            let resp = ui.add(
+                                egui::Label::new(label)
+                                    .truncate()
+                                    .sense(egui::Sense::click()),
+                            );
+                            let resp = if here {
+                                resp.on_hover_text(path.display().to_string())
+                                    .on_hover_cursor(egui::CursorIcon::PointingHand)
+                            } else {
+                                resp.on_hover_text(format!(
+                                    "{} — not there any more.",
+                                    path.display()
+                                ))
+                            };
+                            if here && resp.clicked() {
+                                open = Some(path.clone());
+                            }
+                        });
+                    }
+                });
+            if let Some(path) = forget {
+                app.settings.forget_file(&path);
+            }
+            if let Some(path) = open {
+                app.open(&path);
+                app.settings_open = false;
             }
         },
     );
