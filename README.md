@@ -31,6 +31,62 @@
 
 ---
 
+## 🚀 Install
+
+**Linux** — one line, no root:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/frdcmp/auriscope/main/install.sh | bash
+```
+
+**Windows** — one line, no admin, in PowerShell:
+
+```powershell
+irm https://raw.githubusercontent.com/frdcmp/auriscope/main/install.ps1 | iex
+```
+
+Both take the latest release, verify its SHA-256 and install for the current user only: on Linux into `~/.local`, on Windows into `%LOCALAPPDATA%\Programs\Auriscope`. Both register the app properly — a desktop entry, icons and AppStream metainfo so it appears in your launcher and in "Open With" on Linux; a Start Menu shortcut and a `PATH` entry on Windows.
+
+### Updating
+
+**Run the same command again.** Each script asks GitHub for the latest release, compares it with the copy you have, and does nothing if you are already current. The app itself also checks once a day and shows a *"0.2.0 available"* button in its transport bar, which links here.
+
+### Options
+
+| Option | What it does |
+| :--- | :--- |
+| `--source` | Build from source instead of downloading: your own checkout if you run it from one, otherwise a shallow clone of `main`. Linux only. |
+| `--version vX.Y.Z` | Install a specific release rather than the latest. |
+| `--force` | Reinstall even when that version is already installed. |
+| `--uninstall` | Remove everything the script installed. |
+
+With a clone, call the script directly:
+
+```bash
+./install.sh --source        # build your working tree and install it
+./install.sh --uninstall
+```
+
+Piping leaves no script to pass flags to, so fetch it into a shell or block first:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/frdcmp/auriscope/main/install.sh | bash -s -- --uninstall
+```
+
+```powershell
+& ([scriptblock]::Create((irm https://raw.githubusercontent.com/frdcmp/auriscope/main/install.ps1))) -Uninstall
+```
+
+To make Auriscope the default for a file type on Linux once it is installed:
+
+```bash
+xdg-mime default io.github.frdcmp.Auriscope.desktop audio/x-wav
+```
+
+> WAV files resolve to more than one MIME type depending on the file. If one still opens elsewhere, check with `gio info -a standard::content-type yourfile.wav` and claim that exact string too.
+
+---
+
 ## ✨ Features
 
 ### 🌊 1. Waveform
@@ -170,77 +226,24 @@ Rust throughout. The choices are deliberate; the reasoning matters more than the
 
 ---
 
-## 🚀 Quick Start
+## 🔨 Building from Source
 
-Requires a stable Rust toolchain — `rust-toolchain.toml` pins the exact version.
-
-### 1. System dependencies
-
-**Linux** needs ALSA development headers, which PipeWire systems still use for the cpal backend, plus GTK 3 for the native file dialog. **Windows** needs nothing extra; WASAPI and DX12 are part of the OS.
+Requires a stable Rust toolchain — `rust-toolchain.toml` pins the exact version. Linux needs ALSA development headers, which PipeWire systems still use for the cpal backend, plus GTK 3 for the native file dialog; Windows needs nothing extra, since WASAPI and DX12 are part of the OS.
 
 ```bash
 # Arch
 sudo pacman -S alsa-lib gtk3
 # Debian / Ubuntu
 sudo apt install libasound2-dev libgtk-3-dev
-```
 
-### 2. Run it
-
-```bash
 cargo run -- path/to/file.flac
 ```
 
-> Debug builds are usable because `Cargo.toml` compiles *dependencies* at `opt-level = 3` while keeping your own code at debug settings. Use `--release` for benchmarking and for anything you intend to ship — expect a few minutes, since the release profile uses fat LTO with a single codegen unit.
+> Debug builds are usable because `Cargo.toml` compiles *dependencies* at `opt-level = 3` while keeping your own code at debug settings. Use `--release` for benchmarking and for anything you intend to ship — expect a few minutes, since the release profile uses fat LTO with a single codegen unit. `./install.sh --source` does that build and installs the result.
 
-### 3. Install the binary
+---
 
-```bash
-cargo build --release
-install -Dm755 target/release/auriscope ~/.local/bin/auriscope
-```
-
-With `~/.local/bin` on your `PATH`, `auriscope file.wav` then works from anywhere.
-
-### 4. Desktop integration (Linux)
-
-Register a desktop entry so Auriscope appears in your launcher and in the "Open With" dialog. The filename **must** match the app ID the window sets, or Wayland will not associate the window with the entry.
-
-```bash
-cat > ~/.local/share/applications/io.github.frdcmp.Auriscope.desktop <<'EOF'
-[Desktop Entry]
-Type=Application
-Name=Auriscope
-GenericName=Audio Player and Analyser
-Comment=Play a file and see it: waveform, spectrogram, spectrum
-Exec=/home/YOU/.local/bin/auriscope %f
-Icon=io.github.frdcmp.Auriscope
-Terminal=false
-Categories=AudioVideo;Audio;Player;
-MimeType=audio/wav;audio/x-wav;audio/vnd.wave;audio/flac;audio/x-flac;audio/mpeg;audio/mp4;audio/aac;audio/ogg;audio/x-vorbis+ogg;audio/x-aiff;audio/x-caf;audio/x-ape;audio/x-m4a;audio/x-matroska;
-EOF
-
-# Icons, from the SVG in this repo
-for s in 16 24 32 48 64 128 256 512; do
-  rsvg-convert -w $s -h $s assets/io.github.frdcmp.Auriscope.svg \
-    -o ~/.local/share/icons/hicolor/${s}x${s}/apps/io.github.frdcmp.Auriscope.png
-done
-install -Dm644 assets/io.github.frdcmp.Auriscope.svg \
-  ~/.local/share/icons/hicolor/scalable/apps/io.github.frdcmp.Auriscope.svg
-
-update-desktop-database ~/.local/share/applications
-gtk-update-icon-cache -f -t ~/.local/share/icons/hicolor
-```
-
-Use an **absolute path** in `Exec` — the session that launches desktop files does not always inherit `~/.local/bin` on `PATH` — and `%f` rather than `%U`, since the app wants a plain path and not a URI. To make it the default handler for a type:
-
-```bash
-xdg-mime default io.github.frdcmp.Auriscope.desktop audio/x-wav
-```
-
-> WAV files resolve to more than one MIME type depending on the file. If one still opens elsewhere, check with `gio info -a standard::content-type yourfile.wav` and claim that exact string too.
-
-### ⌨️ Keyboard
+## ⌨️ Keyboard
 
 | Key | Action |
 | :--- | :--- |

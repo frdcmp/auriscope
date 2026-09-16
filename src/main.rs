@@ -8,7 +8,32 @@ use std::path::PathBuf;
 fn main() -> eframe::Result {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("warn")).init();
 
-    let initial: Option<PathBuf> = std::env::args_os().nth(1).map(PathBuf::from);
+    let arg = std::env::args_os().nth(1);
+    // `--version` is what the installer reads to decide whether an update is
+    // due, so it prints the bare number and nothing else. On Windows the
+    // release build has no console attached; these still work when run from
+    // one, and are harmless when double-clicked.
+    match arg.as_deref().and_then(|a| a.to_str()) {
+        Some("--version" | "-V") => {
+            println!("{}", env!("CARGO_PKG_VERSION"));
+            return Ok(());
+        }
+        Some("--help" | "-h") => {
+            println!(
+                "Auriscope {} — audio player and analyser\n\n\
+                 Usage: auriscope [FILE]\n\n\
+                 Options:\n  \
+                 -V, --version  print the version and exit\n  \
+                 -h, --help     print this help and exit\n\n\
+                 Opening a file is also possible from the launcher, by drag and\n\
+                 drop, or with Ctrl+O once the window is up.",
+                env!("CARGO_PKG_VERSION")
+            );
+            return Ok(());
+        }
+        _ => {}
+    }
+    let initial: Option<PathBuf> = arg.map(PathBuf::from);
 
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
