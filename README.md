@@ -321,7 +321,7 @@ Everything a distribution needs lives in the repo: the desktop entry and AppStre
 
 ### Flatpak / Flathub
 
-`packaging/flatpak/io.github.frdcmp.Auriscope.yml` builds against the freedesktop 24.08 runtime with the Rust SDK extension. Flathub builds offline, so every crate in `Cargo.lock` is listed in `cargo-sources.json`; regenerate it whenever the lockfile changes:
+`packaging/flatpak/io.github.frdcmp.Auriscope.yml` builds against the freedesktop 25.08 runtime with the Rust SDK extension. Flathub builds offline, so every crate in `Cargo.lock` is listed in `cargo-sources.json`; regenerate it whenever the lockfile changes:
 
 ```bash
 python3 packaging/flatpak/gen-cargo-sources.py Cargo.lock -o packaging/flatpak/cargo-sources.json
@@ -330,7 +330,7 @@ python3 packaging/flatpak/gen-cargo-sources.py Cargo.lock -o packaging/flatpak/c
 The Flatpak build uses `--features portal`, which routes the Open dialog through the XDG file-chooser portal instead of GTK, so the sandbox needs no filesystem permission: `--socket=wayland`, `--socket=fallback-x11`, `--device=dri` for wgpu and `--socket=pulseaudio` for cpal are the whole list. Build and try it locally:
 
 ```bash
-flatpak install flathub org.freedesktop.Sdk//24.08 org.freedesktop.Sdk.Extension.rust-stable//24.08
+flatpak install flathub org.freedesktop.Sdk//25.08 org.freedesktop.Sdk.Extension.rust-stable//25.08
 flatpak-builder --user --install --force-clean build-dir packaging/flatpak/io.github.frdcmp.Auriscope.yml
 flatpak run io.github.frdcmp.Auriscope file.wav
 ```

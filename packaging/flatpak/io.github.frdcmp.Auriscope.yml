@@ -1,8 +1,8 @@
 # Flatpak manifest. For Flathub, copy this file and cargo-sources.json into
 # the submission repository; for a local build:
 #
-#   flatpak install flathub org.freedesktop.Sdk//24.08 \
-#       org.freedesktop.Sdk.Extension.rust-stable//24.08
+#   flatpak install flathub org.freedesktop.Sdk//25.08 \
+#       org.freedesktop.Sdk.Extension.rust-stable//25.08
 #   flatpak-builder --user --install --force-clean build-dir \
 #       packaging/flatpak/io.github.frdcmp.Auriscope.yml
 #
@@ -14,7 +14,7 @@
 
 id: io.github.frdcmp.Auriscope
 runtime: org.freedesktop.Platform
-runtime-version: '24.08'
+runtime-version: '25.08'
 sdk: org.freedesktop.Sdk
 sdk-extensions:
   - org.freedesktop.Sdk.Extension.rust-stable
