@@ -259,6 +259,10 @@ pub fn fmt_hz_full(hz: f32) -> String {
 }
 #[cfg(test)]
 mod tests {
+    // The test below is about Unix paths, so on Windows it is compiled out
+    // and this import would be unused, which `-D warnings` rejects. A test
+    // that is not gated will fail to build here until the cfg comes off.
+    #[cfg(not(windows))]
     use super::*;
 
     #[cfg(not(windows))]
