@@ -1,7 +1,7 @@
 //! Stamps the build with `git describe`, so a development build can say so.
 //!
-//! Outside a git checkout — a release tarball, or Flathub's vendored build —
-//! this is simply empty and the app reports its plain Cargo version.
+//! Outside a git checkout — a release tarball, or a distribution's vendored
+//! build — this is simply empty and the app reports its plain Cargo version.
 
 use std::path::Path;
 use std::process::Command;

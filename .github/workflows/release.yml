@@ -1,8 +1,8 @@
 name: Release
 
 # Builds release binaries when a version tag is pushed and attaches them to
-# the GitHub release for that tag. The Flatpak and AUR packages build from
-# the same tag; these archives are for everyone else.
+# the GitHub release for that tag. The AUR package builds from the same tag;
+# these archives are for everyone else.
 on:
   push:
     tags: ["v*"]

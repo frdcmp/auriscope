@@ -1,9 +1,8 @@
 //! Update check: is there a newer release on GitHub?
 //!
 //! One GET to the releases API on a background thread, at most once a day,
-//! and only in builds with the `update-check` feature. Flatpak and
-//! distribution packages leave it out: their package manager is the update
-//! channel, and Flathub does not allow apps to check on their own. Nothing is
+//! and only in builds with the `update-check` feature. Distribution packages
+//! leave it out: their package manager is the update channel. Nothing is
 //! downloaded here either way; the notice links to the release page.
 
 use std::sync::mpsc;

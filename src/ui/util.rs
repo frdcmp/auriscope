@@ -97,8 +97,8 @@ fn show_in_file_manager(path: &Path) -> std::io::Result<()> {
 #[cfg(not(windows))]
 fn show_in_file_manager(path: &Path) -> std::io::Result<()> {
     // The freedesktop interface every major file manager implements, and what
-    // the portal answers inside a Flatpak sandbox: it opens the folder with the
-    // file selected rather than just the folder.
+    // the desktop portal answers too: it opens the folder with the file
+    // selected rather than just the folder.
     let shown = Command::new("dbus-send")
         .args([
             "--session",

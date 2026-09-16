@@ -227,7 +227,7 @@ What is left to do.
 | 🎮 | **Spectrogram on the GPU.** It uploads as a texture, but the log-frequency mapping and resampling still happen on the CPU into a viewport-sized image. A shader is the intended end state. |
 | 🧵 | **Live spectrum thread.** The realtime FFT runs on the UI thread. One 4096-point real FFT per frame has not been a problem, and it moves off if it ever becomes one. |
 | 🪟 | **Windows.** It compiles there in CI, but nobody has heard it. It also still wants an icon resource on the `.exe`, file associations for double-click open, and a winget manifest. |
-| 📦 | **Distribution.** Flathub is submitted and waiting. The AUR package is written but not published. |
+| 📦 | **Distribution.** The AUR package is written but not published. |
 | 🔖 | **A/B markers.** Drop two marks and jump between them. |
 
 ---
@@ -318,19 +318,9 @@ AURISCOPE_THREADS=1 cargo run --release --example bench_spec -- file.wav
 Everything a distribution needs is in the repo: the desktop entry and AppStream metainfo in `assets/`, the recipes under `packaging/`. They all build from a version tag, so **tag first** (`git tag v0.1.0 && git push --tags`), and the release workflow then attaches the Linux and Windows archives. The full step-by-step is in [RELEASING.md](RELEASING.md).
 
 <details>
-<summary><b>Update check, Flatpak, Arch and Windows specifics</b></summary>
+<summary><b>Update check, Arch and Windows specifics</b></summary>
 
-**Update check.** Builds with the `update-check` feature, on by default and present in the release archives, ask `api.github.com` for the latest release at startup, at most once a day, and show a small *"0.2.0 available"* button in the transport bar. Nothing is downloaded, and nothing about the machine is sent beyond an ordinary HTTPS request. You can turn it off in Settings → About, or skip a version. Flatpak and AUR builds leave it out (`--no-default-features`), since their package manager is the update channel.
-
-**Flatpak.** `packaging/flatpak/io.github.frdcmp.Auriscope.yml` builds against the freedesktop 25.08 runtime with the Rust SDK extension. Flathub builds offline, so every crate in `Cargo.lock` is listed in `cargo-sources.json`. Regenerate it whenever the lockfile changes:
-
-```bash
-python3 packaging/flatpak/gen-cargo-sources.py Cargo.lock -o packaging/flatpak/cargo-sources.json
-flatpak install flathub org.freedesktop.Sdk//25.08 org.freedesktop.Sdk.Extension.rust-stable//25.08
-flatpak-builder --user --install --force-clean build-dir packaging/flatpak/io.github.frdcmp.Auriscope.yml
-```
-
-The build uses `--no-default-features --features portal`, which routes the Open dialog through the XDG portal, so the sandbox needs no filesystem permission. Its whole permission list is `--socket=wayland`, `--socket=fallback-x11`, `--device=dri` for wgpu and `--socket=pulseaudio` for cpal. To submit: set `tag` and `commit` in the manifest, fork `flathub/flathub`, branch from `new-pr`, add the manifest and `cargo-sources.json`, and open a pull request. The app ID sits under `io.github.frdcmp`, so Flathub can verify ownership through GitHub.
+**Update check.** Builds with the `update-check` feature, on by default and present in the release archives, ask `api.github.com` for the latest release at startup, at most once a day, and show a small *"0.2.0 available"* button in the transport bar. Nothing is downloaded, and nothing about the machine is sent beyond an ordinary HTTPS request. You can turn it off in Settings → About, or skip a version. Distribution packages leave it out (`--no-default-features`), since their package manager is the update channel.
 
 **Arch.** `packaging/arch/auriscope/PKGBUILD` builds the tagged release. `packaging/arch/auriscope-git/PKGBUILD` builds `main` and needs no release and no AUR account. To publish: `updpkgsums`, `makepkg --printsrcinfo > .SRCINFO`, then push to `ssh://aur@aur.archlinux.org/auriscope.git`.
 

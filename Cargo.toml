@@ -30,8 +30,8 @@ rtrb = "0.4"
 ebur128 = "0.1"
 colorous = "1.0"
 # File dialogs. `gtk` (default) opens a native GTK dialog; `portal` goes
-# through the XDG desktop portal instead and is what the Flatpak build uses,
-# so the sandbox needs no filesystem permission.
+# through the XDG desktop portal instead, for desktops where that is the
+# native dialog and for builds that want no GTK dependency.
 rfd = { version = "0.17", default-features = false }
 anyhow = "1.0"
 log = "0.4"
@@ -48,8 +48,8 @@ default = ["gtk", "update-check"]
 gtk = ["rfd/gtk3"]
 portal = ["rfd/xdg-portal", "rfd/pollster"]
 # Tell the user when a newer release is on GitHub. For the archives on the
-# release page; Flatpak and distribution packages build without it, since
-# their package manager already does this.
+# release page; distribution packages build without it, since their package
+# manager already does this.
 update-check = ["dep:ureq", "dep:semver"]
 
 # Dependencies at full optimisation even in debug builds. This is what makes
