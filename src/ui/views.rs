@@ -238,25 +238,35 @@ fn interact(app: &mut App, ui: &egui::Ui, resp: &egui::Response, surface: Surfac
     let total = app.total_frames();
     let is_wave = surface == Surface::Wave;
 
+    // Where the button went down, which is not where the pointer is by the
+    // time egui calls the gesture a drag: it only decides that once the
+    // pointer has travelled past the click threshold, and a brisk grab can be
+    // tens of points clear of the handle by then. Every press-relative test
+    // below uses this, so grabbing a handle works at any mouse speed.
+    let press_x = ui.input(|i| i.pointer.press_origin()).map(|o| o.x);
+
     // Range handles live on the ruler: dragging one moves that edge.
     if surface == Surface::Ruler
         && let Some((a, b)) = app.range
-        && let Some(p) = resp.hover_pos()
     {
         let (xa, xb) = (
             frame_to_x(&app.view, rect, a),
             frame_to_x(&app.view, rect, b),
         );
-        let near = (p.x - xa).abs() <= HANDLE_GRAB || (p.x - xb).abs() <= HANDLE_GRAB;
-        if near || app.range_drag.is_some() {
+        let grabbed = |x: f32| (x - xa).abs().min((x - xb).abs()) <= HANDLE_GRAB;
+        let hovering = resp.hover_pos().is_some_and(|p| grabbed(p.x));
+        if hovering || app.range_drag.is_some() {
             ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
         }
-        if resp.drag_started_by(egui::PointerButton::Primary) && near {
-            app.range_drag = Some(if (p.x - xa).abs() <= (p.x - xb).abs() {
-                0
-            } else {
-                1
-            });
+        if app.range_drag.is_none()
+            && resp.drag_started_by(egui::PointerButton::Primary)
+            && let Some(x) = press_x
+            && grabbed(x)
+        {
+            app.range_drag = Some(usize::from((x - xa).abs() > (x - xb).abs()));
+            // The highlight follows the edge being dragged, so the body shows
+            // the range as it is reshaped rather than where it used to be.
+            app.selection = app.range;
         }
     }
     if let Some(which) = app.range_drag {
@@ -266,6 +276,7 @@ fn interact(app: &mut App, ui: &egui::Ui, resp: &egui::Response, surface: Surfac
         {
             let f = x_to_frame(&app.view, rect, p.x).clamp(0.0, total);
             app.range = Some(if which == 0 { (f, b) } else { (a, f) });
+            app.selection = app.range;
         }
         if resp.drag_stopped_by(egui::PointerButton::Primary) {
             app.range_drag = None;
@@ -273,15 +284,16 @@ fn interact(app: &mut App, ui: &egui::Ui, resp: &egui::Response, surface: Surfac
                 .range
                 .map(|(a, b)| (a.min(b), a.max(b)))
                 .filter(|(a, b)| b - a >= 1.0);
+            app.selection = app.range;
             app.apply_loop();
         }
         return;
     }
 
     if resp.drag_started_by(egui::PointerButton::Primary)
-        && let Some(p) = resp.interact_pointer_pos()
+        && let Some(x) = press_x.or_else(|| resp.interact_pointer_pos().map(|p| p.x))
     {
-        let f = x_to_frame(&app.view, rect, p.x).clamp(0.0, total);
+        let f = x_to_frame(&app.view, rect, x).clamp(0.0, total);
         app.selection = Some((f, f));
     }
     if resp.dragged_by(egui::PointerButton::Primary)
