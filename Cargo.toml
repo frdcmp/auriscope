@@ -1,0 +1,46 @@
+[package]
+name = "auriscope"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.98"
+description = "An audio player and analyser: waveform, spectrogram and realtime spectrum."
+repository = "https://github.com/frdcmp/auriscope"
+license = "GPL-3.0-or-later"
+
+[lib]
+name = "auriscope"
+path = "src/lib.rs"
+
+[[bin]]
+name = "auriscope"
+path = "src/main.rs"
+
+[dependencies]
+eframe = { version = "0.36", default-features = false, features = ["default_fonts", "wgpu", "wayland", "x11", "persistence"] }
+egui = "0.36"
+symphonia = { version = "0.6", default-features = false, features = [
+    "wav", "aiff", "caf", "flac", "alac", "ape", "pcm", "adpcm",
+    "mp3", "aac", "vorbis", "ogg", "isomp4", "mkv",
+    "id3v2", "opt-simd",
+] }
+cpal = "0.18"
+realfft = "3.5"
+rubato = "5.0"
+rtrb = "0.4"
+ebur128 = "0.1"
+colorous = "1.0"
+rfd = "0.17"
+anyhow = "1.0"
+log = "0.4"
+env_logger = "0.11"
+serde = { version = "1.0", features = ["derive"] }
+
+# Dependencies at full optimisation even in debug builds. This is what makes
+# `cargo run` usable: FFT, decoding and resampling live in dependencies.
+[profile.dev.package."*"]
+opt-level = 3
+
+[profile.release]
+lto = "fat"
+codegen-units = 1
+strip = true
