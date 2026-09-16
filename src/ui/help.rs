@@ -245,6 +245,7 @@ pub enum Topic {
     Selection,
     RulerRange,
     LoopToggle,
+    OutputMeter,
 
     // ---- settings: cards -----------------------------------------------
     PanesCard,
@@ -647,6 +648,12 @@ impl Topic {
                 "Whether playback repeats the ruler range instead of running to the end of the \
                  file. L toggles it; it needs a range to loop.",
             ),
+            T::OutputMeter => (
+                "Output meter",
+                "Sample peak of what is being sent to the device, per channel, after gain and \
+                 pan. The bar falls at 26 dB a second; the line above it holds the last peak for \
+                 a moment. It measures the output, not the file, so gain and pan move it.",
+            ),
 
             // ---- settings: cards ---------------------------------------
             T::PanesCard => (
@@ -788,7 +795,8 @@ impl Topic {
             T::VerticalZoom => (
                 "Vertical zoom",
                 "Stretches the waveform vertically without changing the audio, to see detail in \
-                 quiet material. Alt+Shift+wheel over the waveform does the same.",
+                 quiet material. At 1x the strip is exactly full scale, so 0 dBFS is the top \
+                 edge. Alt+Shift+wheel over the waveform does the same.",
             ),
             T::WaveHeight => (
                 "Height",
@@ -920,6 +928,7 @@ mod tests {
         Topic::Selection,
         Topic::RulerRange,
         Topic::LoopToggle,
+        Topic::OutputMeter,
         Topic::PanesCard,
         Topic::SpectrogramCard,
         Topic::WaveformCard,

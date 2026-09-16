@@ -213,7 +213,7 @@ Text is set in [JetBrains Mono Nerd Font](https://www.nerdfonts.com/), bundled: 
 | `Esc` | Clear highlight, then range | | Right-click | Clear highlight and range |
 | `Ctrl+O` `Ctrl+,` | Open file / settings | | Drag divider | Rebalance panes (double-click resets) |
 
-Selection works the way a DAW's does. Dragging highlights a region and also sets a range on the time ruler, shown as a band with a handle at each end. The next click clears the highlight but leaves the range, so you can seek around inside it. The band turns green while looping. Vertical zoom runs from 0.1x to 4096x, about 72 dB, which is enough to lift a noise floor to full height.
+Selection works the way a DAW's does. Dragging highlights a region and also sets a range on the time ruler, shown as a band with a handle at each end. The next click clears the highlight but leaves the range, so you can seek around inside it. The band turns green while looping. Vertical zoom runs from 1x to 4096x, about 72 dB, which is enough to lift a noise floor to full height. At 1x the strip is exactly full scale: 0 dBFS sits on the top edge, with no dead air above it.
 
 ---
 

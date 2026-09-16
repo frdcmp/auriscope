@@ -64,6 +64,11 @@ pub struct Shared {
     /// Feeder reached end of file; callback stops when the ring drains.
     pub ended: AtomicBool,
     pub underruns: AtomicU32,
+    /// Peak of what actually went to the device since the UI last read it,
+    /// left and right, as f32 bits. Written by the callback, cleared by the
+    /// reader; a read that lands between the callback's load and store loses
+    /// that one block, which a meter will never show.
+    out_peak: [AtomicU32; 2],
     quit: AtomicBool,
     total_frames: u64,
 }
@@ -82,6 +87,7 @@ impl Shared {
             loop_end: AtomicU64::new(0),
             ended: AtomicBool::new(false),
             underruns: AtomicU32::new(0),
+            out_peak: [AtomicU32::new(0), AtomicU32::new(0)],
             quit: AtomicBool::new(false),
             total_frames,
         }
@@ -104,6 +110,23 @@ impl Shared {
     pub fn set_pan(&self, p: f32) {
         self.pan_bits
             .store(p.clamp(-1.0, 1.0).to_bits(), Ordering::Relaxed);
+    }
+
+    /// Callback side: raise the published output peak.
+    fn raise_out_peak(&self, l: f32, r: f32) {
+        for (slot, v) in self.out_peak.iter().zip([l, r]) {
+            if v > f32::from_bits(slot.load(Ordering::Relaxed)) {
+                slot.store(v.to_bits(), Ordering::Relaxed);
+            }
+        }
+    }
+
+    /// Reader side: the output peak since the last call, left and right. The
+    /// read clears it, so the caller owns the fall-off.
+    pub fn take_out_peak(&self) -> (f32, f32) {
+        let l = f32::from_bits(self.out_peak[0].swap(0, Ordering::Relaxed));
+        let r = f32::from_bits(self.out_peak[1].swap(0, Ordering::Relaxed));
+        (l, r)
     }
 
     pub fn set_loop(&self, region: Option<(u64, u64)>) {
@@ -445,6 +468,19 @@ impl Renderer {
             } else {
                 shared.underruns.fetch_add(1, Ordering::Relaxed);
             }
+        }
+
+        // Output meter: the peak of each device channel over this block,
+        // after gain and pan, which is what the listener actually hears.
+        if i > 0 {
+            let right = usize::from(dch > 1);
+            let (mut pl, mut pr) = (0.0f32, 0.0f32);
+            for f in 0..i {
+                let frame = &out[f * dch..(f + 1) * dch];
+                pl = pl.max(frame[0].abs());
+                pr = pr.max(frame[right].abs());
+            }
+            shared.raise_out_peak(pl, pr);
         }
 
         // Tap: mono mix, dropped on full.

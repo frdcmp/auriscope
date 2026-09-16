@@ -2,8 +2,8 @@
 
 use eframe::egui;
 use egui::{
-    Align, Align2, Color32, FontId, Layout, Margin, Rect, RichText, Sense, Shape, Stroke, pos2,
-    vec2,
+    Align, Align2, Color32, FontId, Layout, Margin, Rangef, Rect, RichText, Sense, Shape, Stroke,
+    pos2, vec2,
 };
 
 use auriscope::analysis::{ColorMap, StftParams, WindowKind, db_to_amp};
@@ -13,7 +13,7 @@ use super::help::{self, Topic};
 use super::icon;
 use super::update;
 use super::util::{fmt_time, fmt_time_field, reveal};
-use super::views::{V_ZOOM_MAX, V_ZOOM_MIN, channel_label};
+use super::views::{V_ZOOM_MAX, V_ZOOM_MIN, channel_name};
 use super::{App, RECENT_MAX};
 
 const TITLEBAR_BG: Color32 = Color32::from_rgb(30, 30, 36);
@@ -339,25 +339,36 @@ pub fn top_bar(app: &mut App, root: &mut egui::Ui) {
                 // as you drag. Monospace digits plus a padded, fixed-length
                 // format keep each box the same size at every value.
                 ui.style_mut().drag_value_text_style = egui::TextStyle::Monospace;
+                // Always signed: a bare "0.0" beside a slider that runs both
+                // ways says nothing about which side of neutral you are on.
+                let gain_tint = gain_tint(app.settings.gain_db);
                 let gain = egui::Slider::new(&mut app.settings.gain_db, -60.0..=12.0)
                     .suffix(" dB")
-                    .text("Gain")
-                    .custom_formatter(|n, _| format!("{n:>5.1}"))
+                    .custom_formatter(|n, _| format!("{n:>+5.1}"))
                     .custom_parser(|s| s.trim().parse().ok());
-                if ui.add(gain).changed()
-                    && let Some(e) = &app.engine
-                {
+                let mut gain_changed = tinted_slider(ui, gain_tint, gain).changed();
+                if reset_label(ui, "Gain", "+0.0 dB").clicked() {
+                    app.settings.gain_db = 0.0;
+                    gain_changed = true;
+                }
+                if gain_changed && let Some(e) = &app.engine {
                     e.shared.set_gain(db_to_amp(app.settings.gain_db));
                 }
+                let pan_tint = pan_tint(app.settings.pan);
                 let pan = egui::Slider::new(&mut app.settings.pan, -1.0..=1.0)
-                    .text("Pan")
-                    .custom_formatter(|n, _| format!("{n:>5.2}"))
+                    .custom_formatter(|n, _| format!("{n:>+5.2}"))
                     .custom_parser(|s| s.trim().parse().ok());
-                if ui.add(pan).changed()
-                    && let Some(e) = &app.engine
-                {
+                let mut pan_changed = tinted_slider(ui, pan_tint, pan).changed();
+                if reset_label(ui, "Pan", "centre").clicked() {
+                    app.settings.pan = 0.0;
+                    pan_changed = true;
+                }
+                if pan_changed && let Some(e) = &app.engine {
                     e.shared.set_pan(app.settings.pan);
                 }
+                ui.separator();
+                out_meter(app, ui);
+                ui.separator();
                 if settings_button(ui, app.settings_open)
                     .on_hover_text("Settings (Ctrl+,)")
                     .clicked()
@@ -380,6 +391,151 @@ pub fn top_bar(app: &mut App, root: &mut egui::Ui) {
             });
         });
     });
+}
+
+/// Where a gain sits on its colour ramp: the hue its far end wears, and how far
+/// along it this value is. Cuts fade toward the quiet key grey; boosts run
+/// through amber into the meter's red, which is where they start costing heads.
+fn gain_tint(db: f32) -> (Color32, f32) {
+    if db >= 0.0 {
+        let t = (db / 12.0).clamp(0.0, 1.0);
+        (WARN.lerp_to_gamma(BAD, (t * 2.0 - 1.0).max(0.0)), t)
+    } else {
+        (KEY, (db / -60.0).clamp(0.0, 1.0))
+    }
+}
+
+/// Pan's ramp: the accent, by how far off centre rather than which way round.
+/// The handle and the sign already say which side, and tinting the two sides
+/// differently would imply one of them is the wrong side to be on.
+fn pan_tint(pan: f32) -> (Color32, f32) {
+    (ACCENT, pan.abs().clamp(0.0, 1.0))
+}
+
+/// Draws a slider carrying its value as colour as well as position: the rail
+/// takes a hint of the hue, the grab and the number take all of it. At the
+/// default nothing is tinted, so a moved control stands out from a bar full of
+/// untouched ones.
+fn tinted_slider(
+    ui: &mut egui::Ui,
+    (hue, t): (Color32, f32),
+    slider: egui::Slider<'_>,
+) -> egui::Response {
+    ui.scope(|ui| {
+        let v = &mut ui.style_mut().visuals;
+        let fg = VAL.lerp_to_gamma(hue, t);
+        // The number is a `DragValue`, and its text follows this override
+        // rather than the stroke the grab is drawn with.
+        v.override_text_color = Some(fg);
+        for w in [
+            &mut v.widgets.inactive,
+            &mut v.widgets.hovered,
+            &mut v.widgets.active,
+        ] {
+            // `bg_fill` is the rail as well as the grab's fill, so it only gets
+            // a wash of the hue: a fully coloured rail would shout.
+            w.bg_fill = w.bg_fill.lerp_to_gamma(hue, 0.45 * t);
+            w.fg_stroke.color = fg;
+        }
+        ui.add(slider)
+    })
+    .inner
+}
+
+/// A slider's caption, drawn here instead of through `Slider::text` so that a
+/// click on it can put the slider back to its neutral value. `Slider` keeps its
+/// label's response to itself, so the only way to hear the click is to draw the
+/// label separately — in a right-to-left row it still lands left of the slider.
+fn reset_label(ui: &mut egui::Ui, text: &str, default: &str) -> egui::Response {
+    ui.add(
+        egui::Label::new(text)
+            .wrap_mode(egui::TextWrapMode::Extend)
+            .sense(Sense::click()),
+    )
+    .on_hover_text(format!("Click to reset to {default}"))
+    .on_hover_cursor(egui::CursorIcon::PointingHand)
+}
+
+/// Output meter geometry: wide enough for 60 dB to stay readable, with room
+/// for the channel letter on the left and its level on the right.
+const METER_W: f32 = 178.0;
+const METER_MIN_DB: f32 = -60.0;
+/// Above this the bar turns amber, and at full scale it turns red.
+const METER_WARN_DB: f32 = -6.0;
+const METER_CLIP_DB: f32 = -0.2;
+
+/// The stereo output meter: one bar per device channel, peak ballistics with
+/// a hold marker, and the same number in dBFS beside it.
+fn out_meter(app: &App, ui: &mut egui::Ui) {
+    let (rect, resp) = ui.allocate_exact_size(vec2(METER_W, ROW_H), Sense::hover());
+    let p = ui.painter_at(rect);
+    const LABEL_COL: f32 = 10.0;
+    const VALUE_COL: f32 = 40.0;
+    const BAR_H: f32 = 7.0;
+    const BAR_GAP: f32 = 3.0;
+    let font = FontId::monospace(fonts::RULER);
+    let x0 = rect.left() + LABEL_COL;
+    let x1 = rect.right() - VALUE_COL;
+    let top = rect.center().y - (BAR_H * 2.0 + BAR_GAP) / 2.0;
+    // Linear in dB: the top 6 dB, where a mix lives or dies, gets a tenth of
+    // the width, the same as any other 6 dB.
+    let frac = |amp: f32| {
+        let db = 20.0 * amp.max(1e-7).log10();
+        ((db - METER_MIN_DB) / -METER_MIN_DB).clamp(0.0, 1.0)
+    };
+    for (ch, name) in ["L", "R"].iter().enumerate() {
+        let m = app.meter[ch];
+        let y = top + ch as f32 * (BAR_H + BAR_GAP);
+        let track = Rect::from_min_max(pos2(x0, y), pos2(x1, y + BAR_H));
+        p.rect_filled(track, 2.0, Color32::from_gray(38));
+        // -6 dB, where the bar changes colour: a hairline so the eye can find
+        // the threshold without reading the number.
+        let warn_x = x0 + (track.width()) * ((METER_WARN_DB - METER_MIN_DB) / -METER_MIN_DB);
+        p.vline(
+            warn_x,
+            Rangef::new(track.top(), track.bottom()),
+            Stroke::new(1.0, Color32::from_gray(58)),
+        );
+        let db = 20.0 * m.level.max(1e-7).log10();
+        let lit = if db >= METER_CLIP_DB {
+            BAD
+        } else if db >= METER_WARN_DB {
+            WARN
+        } else {
+            GOOD
+        };
+        let w = track.width() * frac(m.level);
+        if w > 0.5 {
+            p.rect_filled(Rect::from_min_size(track.min, vec2(w, BAR_H)), 2.0, lit);
+        }
+        if m.hold > 0.0 {
+            let hx = (x0 + track.width() * frac(m.hold)).min(x1 - 1.0);
+            p.vline(
+                hx,
+                Rangef::new(track.top(), track.bottom()),
+                Stroke::new(1.5, lit.gamma_multiply(0.85)),
+            );
+        }
+        p.text(
+            pos2(rect.left(), track.center().y),
+            Align2::LEFT_CENTER,
+            name,
+            font.clone(),
+            Color32::from_gray(120),
+        );
+        p.text(
+            pos2(rect.right(), track.center().y),
+            Align2::RIGHT_CENTER,
+            if m.level <= 1e-6 {
+                "  -inf".into()
+            } else {
+                format!("{db:>6.1}")
+            },
+            font.clone(),
+            if db >= METER_CLIP_DB { BAD } else { VAL },
+        );
+    }
+    help::offer_response(ui, &resp, Topic::OutputMeter);
 }
 
 /// "0.2.0 available" in the transport bar, with a skip button. Shown only
@@ -1515,6 +1671,42 @@ fn loudness_card(app: &App, ui: &mut egui::Ui) {
     );
 }
 
+/// Mute and solo, lit the way a mixer strip lights them: dark while off, the
+/// colour of the function while on.
+const MUTE_LIT: Color32 = Color32::from_rgb(214, 74, 74);
+const SOLO_LIT: Color32 = Color32::from_rgb(235, 186, 62);
+
+/// A latching mixer button. Returns true on the click that toggles it.
+fn mixer_button(ui: &mut egui::Ui, on: bool, text: &str, lit: Color32, tip: &str) -> bool {
+    let (fill, fg, stroke) = if on {
+        (lit, Color32::from_gray(20), Stroke::new(1.0, lit))
+    } else {
+        (CARD_HEAD_BG, KEY, Stroke::new(1.0, CARD_HEAD_RULE))
+    };
+    let resp = ui
+        .add(
+            egui::Button::new(
+                RichText::new(text)
+                    .size(fonts::SMALL)
+                    .family(fonts::bold())
+                    .color(fg),
+            )
+            .fill(fill)
+            .stroke(stroke)
+            .corner_radius(4.0)
+            .min_size(vec2(44.0, 19.0)),
+        )
+        .on_hover_cursor(egui::CursorIcon::PointingHand)
+        .on_hover_text(tip);
+    // An explicit fill overrides egui's own hover shading, so the feedback is
+    // painted back on top.
+    if resp.hovered() {
+        ui.painter()
+            .rect_filled(resp.rect, 4.0, Color32::from_white_alpha(16));
+    }
+    resp.clicked()
+}
+
 fn levels_card(app: &mut App, ui: &mut egui::Ui) {
     let Some(audio) = app.audio.clone() else {
         return;
@@ -1540,21 +1732,25 @@ fn levels_card(app: &mut App, ui: &mut egui::Ui) {
                     ui.add_space(4.0);
                 }
                 ui.horizontal(|ui| {
+                    // The channel's name, then its two controls spelled out:
+                    // "L M S" over an RMS row read as one more abbreviation.
                     ui.label(
-                        RichText::new(channel_label(ch, nch))
+                        RichText::new(channel_name(ch, nch))
                             .family(fonts::bold())
-                            .size(fonts::SMALL)
-                            .color(VAL),
+                            .size(fonts::BODY)
+                            .color(ACCENT),
                     );
                     if nch > 1 {
-                        let mut m = app.mutes[ch];
-                        if ui.toggle_value(&mut m, "M").on_hover_text("Mute").changed() {
-                            app.mutes[ch] = m;
+                        ui.add_space(4.0);
+                        ui.spacing_mut().item_spacing.x = 4.0;
+                        let muted = app.mutes[ch];
+                        if mixer_button(ui, muted, "Mute", MUTE_LIT, "Silence this channel") {
+                            app.mutes[ch] = !muted;
                             changed = true;
                         }
-                        let mut s = app.solo == Some(ch);
-                        if ui.toggle_value(&mut s, "S").on_hover_text("Solo").changed() {
-                            app.solo = if s { Some(ch) } else { None };
+                        let soloed = app.solo == Some(ch);
+                        if mixer_button(ui, soloed, "Solo", SOLO_LIT, "Hear this channel alone") {
+                            app.solo = if soloed { None } else { Some(ch) };
                             changed = true;
                         }
                     }

@@ -43,9 +43,10 @@ const SPLITTER_H: f32 = 7.0;
 /// Neither strip may be dragged below this.
 const MIN_STRIP: f32 = 48.0;
 /// Waveform vertical-zoom limits. The top end is about 72 dB of boost, enough
-/// to lift a noise floor to full height; the bottom end pulls a hot signal
-/// back inside the strip.
-pub const V_ZOOM_MIN: f32 = 0.1;
+/// to lift a noise floor to full height. The bottom end is 1x — full scale
+/// fills the strip — because the only thing below it is empty air above
+/// 0 dBFS, where nothing but the odd float sample over the top can live.
+pub const V_ZOOM_MIN: f32 = 1.0;
 pub const V_ZOOM_MAX: f32 = 4096.0;
 const BG: Color32 = Color32::from_rgb(18, 18, 22);
 /// RMS overlay colour for a given waveform colour: the same hue, lifted
@@ -70,6 +71,9 @@ const SPLITTER_BG: Color32 = Color32::from_rgb(28, 28, 34);
 const SPLITTER_BG_HOT: Color32 = Color32::from_rgb(58, 58, 70);
 const SPLITTER_GRIP: Color32 = Color32::from_gray(110);
 const SPLITTER_GRIP_HOT: Color32 = Color32::from_gray(215);
+/// How much of its brightness a muted channel's spectrogram keeps: enough to
+/// see that the content is still there, little enough to read as switched off.
+const MUTED_SPEC: f32 = 0.3;
 
 pub fn central(app: &mut App, root: &mut egui::Ui) {
     egui::CentralPanel::default()
@@ -580,10 +584,7 @@ fn draw_waveform(app: &App, p: &egui::Painter, rect: Rect, overlay: Option<f32>)
                 Stroke::new(1.0, Color32::from_gray(40)),
             );
         }
-        let muted = match app.solo {
-            Some(s) => s != ch,
-            None => app.mutes.get(ch).copied().unwrap_or(false),
-        };
+        let muted = app.channel_muted(ch);
         let [wr, wg, wb] = app.settings.wave_color;
         let wave_c = Color32::from_rgb(wr, wg, wb);
         let fill = tint(if muted {
@@ -613,9 +614,40 @@ fn draw_waveform(app: &App, p: &egui::Painter, rect: Rect, overlay: Option<f32>)
                 })
                 .collect();
             if pts.len() >= 2 {
-                p.add(egui::Shape::line(pts, Stroke::new(1.0, fill)));
+                p.add(egui::Shape::line(pts.clone(), Stroke::new(1.0, fill)));
+                // Clipped stretches again on top, in the clip colour. The
+                // envelope path colours whole bins; here the run has to be
+                // found sample by sample, or the red vanishes the moment the
+                // view zooms past the envelope threshold.
+                let vals = &samples[a..b];
+                let mut i = 0;
+                while i < vals.len() {
+                    if vals[i].abs() < CLIP_THRESHOLD {
+                        i += 1;
+                        continue;
+                    }
+                    let start = i;
+                    while i < vals.len() && vals[i].abs() >= CLIP_THRESHOLD {
+                        i += 1;
+                    }
+                    // A sample either side, so the run joins the trace it sits
+                    // in rather than floating above it.
+                    let lo = start.saturating_sub(1);
+                    let hi = (i + 1).min(pts.len());
+                    if hi - lo >= 2 {
+                        p.add(egui::Shape::line(
+                            pts[lo..hi].to_vec(),
+                            Stroke::new(1.0, clip_c),
+                        ));
+                    }
+                }
             } else if let Some(&pt) = pts.first() {
-                p.circle_filled(pt, 1.5, fill);
+                let c = if pts.len() == 1 && samples[a].abs() >= CLIP_THRESHOLD {
+                    clip_c
+                } else {
+                    fill
+                };
+                p.circle_filled(pt, 1.5, c);
             }
         } else {
             let bins = pyr.query(ch, &audio.channels[ch], app.view.start, app.view.end, width);
@@ -647,7 +679,8 @@ fn draw_waveform(app: &App, p: &egui::Painter, rect: Rect, overlay: Option<f32>)
         if app.settings.show_db_scale {
             draw_db_axis(p, rect, top, ch_h, mid, half, vz, over);
         }
-        if !over {
+        // Mono needs no label: there is nothing for it to tell apart.
+        if !over && nch > 1 {
             p.text(
                 pos2(rect.left() + 4.0, top + 2.0),
                 Align2::LEFT_TOP,
@@ -695,9 +728,11 @@ fn draw_db_axis(
         )
     };
     let bottom = top + ch_h;
-    // Leave the channel label's corner alone.
-    let y_min = top + 13.0;
-    let y_max = bottom - 3.0;
+    // Leave the channel label's corner alone. The right-hand axis has no label
+    // to dodge, so it can carry the 0 dBFS tick right on the strip's edge,
+    // which is where full scale sits at 1x.
+    let y_min = if right { top + 1.0 } else { top + 13.0 };
+    let y_max = bottom - 1.0;
     let mut placed: Vec<f32> = Vec::new();
     for db in STEPS {
         let amp = 10f32.powf(db / 20.0) * vz;
@@ -711,8 +746,11 @@ fn draw_db_axis(
             }
             placed.push(y);
             p.hline(Rangef::new(x_tick0, x_tick1), y, Stroke::new(1.0, DB_AXIS));
+            // A tick on the very edge would have half its label outside the
+            // strip, so the text alone is nudged back inside.
+            let ty = y.clamp(top + 7.0, bottom - 7.0);
             p.text(
-                pos2(x_text, y),
+                pos2(x_text, ty),
                 align,
                 format!("{db:.0}"),
                 font.clone(),
@@ -754,6 +792,18 @@ fn draw_splitter(p: &egui::Painter, rect: Rect, active: bool) {
     };
     for dx in [-16.0, -8.0, 0.0, 8.0, 16.0] {
         p.circle_filled(pos2(c.x + dx, c.y), 1.1, col);
+    }
+}
+
+/// The channel's name in full, for the places with room for it. A bare "L"
+/// beside a Mute/Solo pair reads as one more letter in a row of letters,
+/// especially with an RMS row underneath.
+pub fn channel_name(ch: usize, nch: usize) -> String {
+    match (nch, ch) {
+        (1, _) => "Mono".into(),
+        (2, 0) => "Left".into(),
+        (2, 1) => "Right".into(),
+        _ => format!("Channel {}", ch + 1),
     }
 }
 
@@ -840,11 +890,10 @@ fn draw_spectrogram(app: &mut App, ui: &egui::Ui, p: &egui::Painter, rect: Rect)
         .lut_with(app.settings.spec_contrast, &app.settings.custom_stops);
     let merged =
         app.settings.merge_views && app.settings.show_waveform && app.settings.show_spectrogram;
-    let spec_tint = if merged {
-        let a = (app.settings.merge_spec_opacity.clamp(0.05, 1.0) * 255.0) as u8;
-        Color32::from_rgba_unmultiplied(255, 255, 255, a)
+    let base_opacity = if merged {
+        app.settings.merge_spec_opacity.clamp(0.05, 1.0)
     } else {
-        Color32::WHITE
+        1.0
     };
     let ppp = ui.ctx().pixels_per_point();
     // Ask for high-resolution tiles if the zoom has outrun the base hop.
@@ -855,6 +904,14 @@ fn draw_spectrogram(app: &mut App, ui: &egui::Ui, p: &egui::Painter, rect: Rect)
             pos2(rect.left(), rect.top() + ch_h * ch as f32),
             vec2(rect.width(), ch_h),
         );
+        // A muted channel is dimmed the way its waveform is: the image fades
+        // back towards the black behind it, so a soloed channel reads as the
+        // only one still speaking.
+        let muted = app.channel_muted(ch);
+        let spec_tint = {
+            let o = base_opacity * if muted { MUTED_SPEC } else { 1.0 };
+            Color32::from_rgba_unmultiplied(255, 255, 255, (o * 255.0) as u8)
+        };
         let Some(spec) = app.spectrograms.get(ch).cloned().flatten() else {
             let msg = match &app.spec_job_progress {
                 _ if app.job.is_some() => "computing spectrogram…",
@@ -941,7 +998,7 @@ fn draw_spectrogram(app: &mut App, ui: &egui::Ui, p: &egui::Painter, rect: Rect)
         if let Some((tex, k)) = &app.spec_textures[ch] {
             draw_remapped(p, tex, k, &key, crect, spec_tint);
         }
-        draw_freq_axis(app, p, crect, spec.nyquist());
+        draw_freq_axis(app, p, crect, spec.nyquist(), nch > 1);
         if ch > 0 {
             p.hline(
                 rect.x_range(),
@@ -949,13 +1006,18 @@ fn draw_spectrogram(app: &mut App, ui: &egui::Ui, p: &egui::Painter, rect: Rect)
                 Stroke::new(1.0, Color32::from_gray(60)),
             );
         }
-        p.text(
-            pos2(crect.right() - 4.0, crect.top() + 2.0),
-            Align2::RIGHT_TOP,
-            channel_label(ch, nch),
-            FontId::monospace(fonts::RULER),
-            Color32::from_gray(200),
-        );
+        // Top left, the same corner the standalone waveform uses: the right
+        // edge belongs to the dB axis, whose 0 dBFS tick sits on the very top
+        // of the strip.
+        if nch > 1 {
+            p.text(
+                pos2(crect.left() + 4.0, crect.top() + 2.0),
+                Align2::LEFT_TOP,
+                channel_label(ch, nch),
+                FontId::monospace(fonts::RULER),
+                Color32::from_gray(200),
+            );
+        }
     }
 }
 
@@ -987,7 +1049,9 @@ fn y_to_hz(app: &App, rect: Rect, y: f32, nyquist: f32) -> f32 {
     }
 }
 
-fn draw_freq_axis(app: &App, p: &egui::Painter, rect: Rect, nyquist: f32) {
+/// `label_corner` is set when a channel label occupies the strip's top-left
+/// corner, so the topmost frequency stays clear of it.
+fn draw_freq_axis(app: &App, p: &egui::Painter, rect: Rect, nyquist: f32, label_corner: bool) {
     let ticks: &[f32] = if app.settings.log_frequency {
         &[
             20.0, 50.0, 100.0, 200.0, 500.0, 1000.0, 2000.0, 5000.0, 10000.0, 20000.0, 40000.0,
@@ -1005,7 +1069,8 @@ fn draw_freq_axis(app: &App, p: &egui::Painter, rect: Rect, nyquist: f32) {
             continue;
         }
         let y = hz_to_y(app, rect, hz, nyquist);
-        if (last_y - y).abs() < 12.0 || y < rect.top() + 6.0 || y > rect.bottom() - 2.0 {
+        let y_min = rect.top() + if label_corner { 16.0 } else { 6.0 };
+        if (last_y - y).abs() < 12.0 || y < y_min || y > rect.bottom() - 2.0 {
             continue;
         }
         last_y = y;

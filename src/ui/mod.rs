@@ -236,6 +236,10 @@ pub struct App {
     detail_cancel: Option<Arc<AtomicBool>>,
     detail_rx: Option<mpsc::Receiver<(usize, Arc<DetailTile>)>>,
     live: Option<LiveSpectrum>,
+    /// Output meter, per device channel: the bar's level and the peak-hold
+    /// above it, both linear amplitude. The engine publishes instantaneous
+    /// peaks; the fall-off lives here, where the frame time is known.
+    pub meter: [MeterChannel; 2],
     job: Option<Job>,
     /// Spectrogram job counter; results from older jobs are ignored.
     spec_job: u64,
@@ -287,10 +291,15 @@ const ICON_GAP: f32 = 7.0;
 
 impl App {
     pub fn new(cc: &eframe::CreationContext<'_>, initial: Option<PathBuf>) -> Self {
-        let settings: Settings = cc
+        let mut settings: Settings = cc
             .storage
             .and_then(|s| eframe::get_value(s, eframe::APP_KEY))
             .unwrap_or_default();
+        // A stored zoom from a build whose range reached below 1x would leave
+        // the strip with dead space above 0 dBFS.
+        settings.wave_v_zoom = settings
+            .wave_v_zoom
+            .clamp(views::V_ZOOM_MIN, views::V_ZOOM_MAX);
         // set_visuals alone loses to egui's system-theme sync, which repaints
         // the app in the desktop's light theme. Setting the *preference* is
         // what actually sticks.
@@ -322,6 +331,7 @@ impl App {
             detail_cancel: None,
             detail_rx: None,
             live: None,
+            meter: Default::default(),
             job: None,
             spec_job: 0,
             spec_job_progress: None,
@@ -386,6 +396,7 @@ impl App {
         self.cancel_detail();
         self.stats = None;
         self.live = None;
+        self.meter = Default::default();
         self.selection = None;
         self.range = None;
         self.range_drag = None;
@@ -666,17 +677,23 @@ impl App {
         }
     }
 
+    /// Whether a channel is silent right now: explicitly muted, or left out
+    /// by a solo elsewhere. The views dim what this returns true for, so the
+    /// picture says the same thing as the sound.
+    pub fn channel_muted(&self, ch: usize) -> bool {
+        match self.solo {
+            Some(s) => s != ch,
+            None => self.mutes.get(ch).copied().unwrap_or(false),
+        }
+    }
+
     fn apply_mutes(&self) {
         let Some(engine) = &self.engine else {
             return;
         };
         let mut mask = 0u32;
-        for (i, m) in self.mutes.iter().enumerate() {
-            let muted = match self.solo {
-                Some(s) => s != i,
-                None => *m,
-            };
-            if muted {
+        for i in 0..self.mutes.len() {
+            if self.channel_muted(i) {
                 mask |= 1 << i.min(31);
             }
         }
@@ -944,10 +961,53 @@ impl App {
         let now = Instant::now();
         let dt = now.duration_since(self.last_tick).as_secs_f32().min(0.2);
         self.last_tick = now;
+        // The meter falls whether or not anything is playing, so it is stepped
+        // before the engine check rather than inside it.
+        let peaks = match &self.engine {
+            Some(e) => e.shared.take_out_peak(),
+            None => (0.0, 0.0),
+        };
+        for (m, p) in self.meter.iter_mut().zip([peaks.0, peaks.1]) {
+            m.push(p, dt);
+        }
         if let (Some(engine), Some(live)) = (&mut self.engine, &mut self.live) {
             live.averaging = self.settings.spectrum_averaging;
             engine.drain_tap(|s| live.push(s));
             live.update(dt);
+        }
+    }
+}
+
+/// One channel of the output meter. Peak ballistics: instant rise, a steady
+/// fall in dB per second, and a peak-hold that sits still before it drops.
+#[derive(Default, Clone, Copy)]
+pub struct MeterChannel {
+    /// Bar level, linear amplitude.
+    pub level: f32,
+    /// Peak-hold marker, linear amplitude.
+    pub hold: f32,
+    /// Seconds the hold has been standing still.
+    held_for: f32,
+}
+
+impl MeterChannel {
+    /// Fall of the bar and of the hold marker, in dB per second, and how long
+    /// the marker stands before it starts to fall.
+    const FALL_DB: f32 = 26.0;
+    const HOLD_FALL_DB: f32 = 12.0;
+    const HOLD_SECS: f32 = 1.2;
+
+    fn push(&mut self, peak: f32, dt: f32) {
+        let fall = |v: f32, db: f32| v * 10f32.powf(-db * dt / 20.0);
+        self.level = peak.max(fall(self.level, Self::FALL_DB));
+        if peak >= self.hold {
+            self.hold = peak;
+            self.held_for = 0.0;
+        } else {
+            self.held_for += dt;
+            if self.held_for > Self::HOLD_SECS {
+                self.hold = fall(self.hold, Self::HOLD_FALL_DB).max(self.level);
+            }
         }
     }
 }
