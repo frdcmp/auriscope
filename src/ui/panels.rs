@@ -1424,6 +1424,28 @@ fn palette_strip(ui: &mut egui::Ui, lut: &[Color32]) {
     );
 }
 
+/// Readouts for the STFT resolution line: enough digits to tell two settings
+/// apart, no more.
+fn fmt_hz(hz: f64) -> String {
+    if hz >= 100.0 {
+        format!("{hz:.0} Hz")
+    } else {
+        format!("{hz:.1} Hz")
+    }
+}
+
+fn fmt_ms(ms: f64) -> String {
+    if ms >= 100.0 {
+        format!("{ms:.0} ms")
+    } else {
+        format!("{ms:.1} ms")
+    }
+}
+
+fn fmt_rate(sr: f64) -> String {
+    format!("{:.1} kHz", sr / 1000.0)
+}
+
 fn combo(id: &str) -> egui::ComboBox {
     egui::ComboBox::from_id_salt(id).width(COMBO_W)
 }
@@ -1500,15 +1522,6 @@ fn spectrogram_card(app: &mut App, ui: &mut egui::Ui) {
                                 ui.selectable_value(&mut stft.window_size, s, s.to_string());
                             }
                         });
-                    let sr = app.sample_rate().max(1.0);
-                    ui.label(
-                        RichText::new(format!(
-                            "{:.1} Hz · {:.1} ms",
-                            sr / stft.window_size as f64,
-                            stft.window_size as f64 / sr * 1000.0
-                        ))
-                        .color(KEY),
-                    );
                 },
             );
             setting(ui, "Overlap", "", |ui| {
@@ -1533,6 +1546,21 @@ fn spectrogram_card(app: &mut App, ui: &mut egui::Ui) {
                             ui.selectable_value(&mut stft.window, w, w.name());
                         }
                     });
+            });
+            let sr = app.sample_rate().max(1.0);
+            let hint = format!(
+                "What those choices come out to at {}: the width of one frequency bin, \
+                 the span of audio in each frame, and how far the window steps between \
+                 frames.",
+                fmt_rate(sr)
+            );
+            setting(ui, "Resolution", &hint, |ui| {
+                ui.label(mono(format!(
+                    "bin {} · frame {} · hop {}",
+                    fmt_hz(sr / stft.window_size as f64),
+                    fmt_ms(stft.window_size as f64 / sr * 1000.0),
+                    fmt_ms(stft.hop() as f64 / sr * 1000.0),
+                )));
             });
             setting(
                 ui,

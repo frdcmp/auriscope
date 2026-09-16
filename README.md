@@ -3,154 +3,125 @@
 
   # Auriscope
 
-  ### An Audio Player & Analyser for Linux and Windows
+  ### An audio player and analyser for Linux and Windows
 
-  *Play a file, and **see** it — waveform, spectrogram and realtime spectrum, in the spirit of Sound Forge and iZotope RX.*
+  *Play a file, and **see** it: waveform, spectrogram and realtime spectrum.*
 
   [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-b6377a.svg?style=flat-square)](LICENSE)
   [![Rust](https://img.shields.io/badge/Rust-1.98+-3a4150.svg?logo=rust&logoColor=white&style=flat-square)](https://www.rust-lang.org/)
   [![GUI](https://img.shields.io/badge/GUI-egui_0.36_%2F_wgpu-5b1878.svg?style=flat-square)](https://github.com/emilk/egui)
   [![Decoding](https://img.shields.io/badge/Decode-Symphonia_0.6-9c2a6f.svg?style=flat-square)](https://github.com/pdeljanov/Symphonia)
   [![Platform](https://img.shields.io/badge/Platform-Linux_%7C_Windows-2b2b35.svg?style=flat-square)](#-install)
-  ![Status](https://img.shields.io/badge/Status-M1--M4_complete-3fa46a.svg?style=flat-square)
+  ![Status](https://img.shields.io/badge/Status-Beta-3fa46a.svg?style=flat-square)
 
-  **[⬇ Download the latest release](https://github.com/frdcmp/auriscope/releases/latest)** — Windows `.zip` and Linux `.tar.gz`
+  **[⬇ Download the latest release](https://github.com/frdcmp/auriscope/releases/latest)**
+  &nbsp;·&nbsp; Windows `.zip` &nbsp;·&nbsp; Linux `.tar.gz`
 </div>
+
+<div align="center">
+  <img src="assets/screenshot.png" width="100%" alt="Auriscope showing a log sweep and a 1 kHz tone, with a clipped region flagged in red" />
+  <sub><i>A synthetic test file: log sweep on the left channel, 1 kHz tone plus impulses on the right, clipped burst at 0:05 flagged in red.</i></sub>
+</div>
+
+---
 
 > An auriscope is the instrument a doctor uses to look inside the ear.
 > This one is for looking inside the audio.
 
----
-
-<div align="center">
-  <img src="assets/screenshot.png" width="100%" alt="Auriscope showing a log sweep and a 1 kHz tone, with a clipped region flagged in red" />
-  <sub><i>A synthetic test file: log sweep on the left channel, 1 kHz tone plus impulses on the right, and a deliberately clipped burst at 0:05 flagged in red.</i></sub>
-</div>
-
----
-
-**Auriscope** opens an audio file and shows you what is actually in it. Three synchronised views — waveform, whole-file spectrogram and realtime spectrum — sit over a playback engine whose audio callback never blocks, never allocates and never takes a lock. It is a **player and analyser, not an editor**: it never modifies your files, which keeps the architecture simple and the tool trustworthy.
+Auriscope shows three synchronised views of a file: the waveform, a spectrogram of the whole file, and a live spectrum. Underneath sits a playback engine whose audio callback never blocks, never allocates and never takes a lock. It is a player and an analyser, not an editor, so it never writes to your files.
 
 ---
 
 ## 🚀 Install
 
-**Linux** — one line, no root:
+**Linux**, one line, no root:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/frdcmp/auriscope/main/install.sh | bash
 ```
 
-**Windows** — one line, no admin, in PowerShell:
+**Windows**, one line, no admin, in PowerShell:
 
 ```powershell
 irm https://raw.githubusercontent.com/frdcmp/auriscope/main/install.ps1 | iex
 ```
 
-### Or download it by hand
+Both scripts check the release SHA-256 and install for the current user only, into `~/.local` or `%LOCALAPPDATA%\Programs\Auriscope`, with a launcher entry, icons and file associations. **To update, run the same command again.** It does nothing if you already have the newest version.
 
-Every release carries a **Windows `.zip`** and a **Linux `.tar.gz`**, each with a `.sha256` beside it:
+<details>
+<summary><b>Manual download, installer flags and file associations</b></summary>
 
-| | |
+Every release carries `auriscope-<version>-x86_64-windows.zip` and `auriscope-<version>-x86_64-linux.tar.gz`, each with a `.sha256` beside it. Unpack anywhere and run it. There is nothing to install. Windows will warn that the publisher is unknown, because the binary is not code-signed: choose *More info → Run anyway*. The app checks once a day for a newer release, so a hand-installed copy is not a dead end.
+
+| Flag | What it does |
 | :--- | :--- |
-| 🪟 **Windows** | **[Latest release ⬇](https://github.com/frdcmp/auriscope/releases/latest)** — take `auriscope-<version>-x86_64-windows.zip`, unzip it anywhere and run `auriscope.exe`. Nothing to install, no admin. Windows may warn that the publisher is unknown, since the binary is not code-signed: choose *More info → Run anyway*. |
-| 🐧 **Linux** | **[Latest release ⬇](https://github.com/frdcmp/auriscope/releases/latest)** — take `auriscope-<version>-x86_64-linux.tar.gz`, unpack it and run `./auriscope`. |
-
-The app tells you when a newer release is out, so a hand-installed copy is not a dead end.
-
-### What the scripts do
-
-They take the latest release, verify its SHA-256 and install for the current user only: on Linux into `~/.local`, on Windows into `%LOCALAPPDATA%\Programs\Auriscope`. Both register the app properly — a desktop entry, icons and AppStream metainfo so it appears in your launcher and in "Open With" on Linux; a Start Menu shortcut and a `PATH` entry on Windows.
-
-### Updating
-
-**Run the same command again.** Each script asks GitHub for the latest release, compares it with the copy you have, and does nothing if you are already current. The app itself also checks once a day and shows a *"0.2.0 available"* button in its transport bar, which links here.
-
-### Options
-
-| Option | What it does |
-| :--- | :--- |
-| `--git` | **Bleeding edge.** Fetch the newest `main` from GitHub, build it and install that, ignoring any checkout you happen to be standing in. Linux only. |
-| `--source` | Build and install the working tree you run it from, or a clone of `main` if there is none. Linux only. |
-| `--version vX.Y.Z` | Install a specific release rather than the latest. |
-| `--force` | Reinstall even when that version is already installed. |
+| `--git` | Build and install the newest `main` from GitHub. Linux only. |
+| `--source` | Build and install the working tree you run it from. Linux only. |
+| `--version vX.Y.Z` | Install a specific release. |
+| `--force` | Reinstall even if that version is already there. |
 | `--uninstall` | Remove everything the script installed. |
 
-With a clone, call the script directly:
-
-```bash
-./install.sh --source        # build your working tree and install it
-./install.sh --uninstall
-```
-
-Piping leaves no script to pass flags to, so fetch it into a shell or block first:
+Piping leaves no script to pass flags to, so fetch it into a shell or a block first:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/frdcmp/auriscope/main/install.sh | bash -s -- --uninstall
 ```
-
 ```powershell
 & ([scriptblock]::Create((irm https://raw.githubusercontent.com/frdcmp/auriscope/main/install.ps1))) -Uninstall
 ```
 
-To make Auriscope the default for a file type on Linux once it is installed:
+To make Auriscope the default for a file type on Linux:
 
 ```bash
 xdg-mime default io.github.frdcmp.Auriscope.desktop audio/x-wav
 ```
 
-> WAV files resolve to more than one MIME type depending on the file. If one still opens elsewhere, check with `gio info -a standard::content-type yourfile.wav` and claim that exact string too.
+WAV resolves to more than one MIME type. If a file still opens elsewhere, run `gio info -a standard::content-type yourfile.wav` and claim that string too.
+
+</details>
 
 ---
 
 ## ✨ Features
 
-### 🌊 1. Waveform
-Peak and RMS envelope drawn from a multi-resolution pyramid, so a two-hour file zoomed all the way out is a read of a few thousand precomputed values rather than a scan of hundreds of millions of samples. Per-channel display, a dBFS scale that follows the vertical zoom, clipped runs highlighted in red, zoom from the whole file down to individual samples.
+| | | |
+| :---: | :--- | :--- |
+| 🌊 | **Waveform** | Peak and RMS drawn from a multi-resolution pyramid, so a two-hour file zoomed out reads a few thousand cached values instead of millions of samples. Per-channel display, dBFS scale, clipped runs in red, zoom down to the single sample. |
+| 🔥 | **Spectrogram** | An STFT of the whole file, ready as soon as analysis finishes. Window size, overlap and function; linear or log frequency; nine palettes; a contrast curve; adjustable dB floor and ceiling. Hovering reads out time, frequency, level and channel. |
+| 📈 | **Realtime spectrum** | A separate, cheap FFT over whatever just went to the output device, with averaging and a decaying peak-hold trace. Log axis, matching the spectrogram above it. |
+| 📊 | **Delivery checks** | Integrated, short-term and momentary LUFS, loudness range and true peak (EBU R128). Clipped sample counts and run counts. Per channel: sample peak, true peak, RMS, DC offset. Stereo phase correlation. |
+| 🎛️ | **A real player** | Sample-accurate click-to-seek, drag-to-select with loop regions, gain and pan, per-channel mute and solo, keyboard navigation. Opens by double-click, drag-and-drop, `Ctrl+O` or a command-line argument. |
+| ⚙️ | **One settings dialog** | `Ctrl+,` holds every view control. Show or hide each pane on its own, and a hidden pane gives its space to the others. Or merge the waveform over the spectrogram in one strip, each with its own opacity. |
+| 🗂️ | **A side panel worth reading** | Cards for the file, the WAVE header, Broadcast Wave metadata, tags, cue markers, loudness, per-channel levels, the live analysis parameters and the cursor. |
+| 🔒 | **Read-only by design** | Auriscope never writes to your audio. Your settings persist between runs; your files do not change. |
 
-### 🔥 2. Spectrogram
-An STFT heatmap of the **whole file**, available the moment analysis finishes rather than filling in as you listen. Configurable window size, overlap and window function, linear or logarithmic frequency axis, seven colour maps led by an Amber palette in the restoration-suite tradition, a contrast curve, and adjustable dB floor and ceiling. Hovering reads out time, frequency, level and channel. This is the view you actually diagnose problems in.
+<details>
+<summary><b>How the spectrogram stays sharp when you zoom</b></summary>
 
-**It sharpens as you zoom.** The whole-file pass is computed at one hop, so magnifying past a column per pixel would otherwise just enlarge blocks. Zooming in instead triggers a background re-transform of the visible range at whatever hop the current zoom deserves, and sampling interpolates rather than peak-picks wherever the view magnifies. Note the honest limit: hop controls how densely the transform is *sampled*, while true time resolution is set by the window length — to separate events closer together than one window, shorten the window.
+The whole-file pass is computed at one hop, so magnifying past a column per pixel would only enlarge blocks. Zooming instead starts a background re-transform of the visible range, at a hop that suits the current zoom, and sampling interpolates rather than peak-picks wherever the view magnifies.
 
-**Reassignment, for the RX look.** The reason a restoration suite's spectrogram looks crisper than a textbook STFT is not a finer FFT; it is *time-frequency reassignment*. An ordinary spectrogram paints each bin's energy at the bin's nominal frequency and the frame's nominal time, so a steady tone smears across the window's main lobe and a click smears across every frame that overlaps it. Reassignment computes two extra transforms per frame — against the time-weighted window and the derivative window — which give, per bin, where in time the energy actually sits and what frequency it actually has, then paints it there instead. Tones collapse to hairlines, clicks to single columns. Switch it on in Settings; it costs three FFTs per frame instead of one. Palettes: *Amber* is the restoration-suite look, blue in the quiet half and orange above; *Ember* keeps the warmth without the blue, for use over a blue waveform; *Custom* takes three colours of your own for the quiet, medium and loud ends, over black, with a live preview strip; and the colorous maps (Magma, Inferno, Viridis, Plasma, Turbo) and Grey are there too. The waveform colour is pickable as well, with swatches, so the two views never have to share a hue. Cells more than 70 dB below the frame's peak are left where the plain STFT would put them, because down there the estimates are dominated by leakage and point nowhere useful. Everything else is stored with its *sub-bin position*, one extra byte per cell, and drawn there: rounding to whole bins would turn a gliding harmonic into a staircase one bin tall per step, which at high zoom is many pixels, while smearing it across neighbouring bins would triple the line's width. Recording the fraction keeps lines one bin thin and lets them glide continuously. Zooming keeps drawing the last high-resolution tile while its replacement is computed, and recomputation waits for the view to settle, so the picture never snaps back to the coarse level between wheel notches. The image itself is rendered on a worker thread, in parallel across pixel columns; until it lands, the previous image is drawn shifted and stretched to the new view, so the UI thread never waits on a render and a wheel notch costs a frame, not a redraw.
+One honest limit: the hop controls how densely the transform is *sampled*, while true time resolution comes from the window length. To separate events closer together than one window, shorten the window.
 
-### 📈 3. Realtime Spectrum
-A separate, much cheaper FFT over whatever just went to the output device, with adjustable averaging and a decaying peak-hold trace. Logarithmic frequency axis matching the spectrogram above it.
+The last high-resolution tile keeps being drawn while its replacement is computed, and recomputation waits for the view to settle, so the picture never snaps back to the coarse level between wheel notches. Rendering happens on a worker thread, in parallel across pixel columns. Until it lands, the previous image is drawn shifted and stretched to the new view, so a wheel notch costs a frame, not a redraw.
 
-### 📊 4. Loudness & Delivery Checks
-Everything a deliverable check needs, computed in one pass on open:
-*   **Loudness:** integrated, short-term and momentary LUFS, loudness range, and true peak (EBU R128 / ITU-R BS.1770).
-*   **Clipping:** clipped sample counts *and* run counts, so a single inter-sample kiss is distinguishable from a crushed passage.
-*   **Per channel:** sample peak, true peak, RMS and DC offset.
-*   **Stereo:** phase correlation, to catch an inverted or collapsing mix.
+</details>
 
-### ⚙️ 5. One Settings Dialog
-A gear in the transport bar (or `Ctrl+,`) opens a modal holding every view control in one place: which panes to show at all — waveform, spectrogram, spectrum, each independently — plus the window size, overlap, window function, colour map, frequency scale and dB range for the spectrogram, the waveform's colour, the RMS overlay, strip height and vertical zoom for the waveform, and the FFT size and averaging for the spectrum. Hiding a pane gives its space to the others. The side panel keeps what you read rather than what you set.
+<details>
+<summary><b>Time-frequency reassignment, and why the lines get thin</b></summary>
 
-**Merge, if you prefer one pane.** A toggle draws the waveform straight over the spectrogram, sharing a single strip instead of stacking two, with independent opacity for the waveform and for the spectrogram underneath it. The waveform keeps its blue, its dBFS scale moves to the right edge so the frequency axis keeps the left, the divider disappears, the vertical-zoom gesture still applies to the overlay, and clipped runs stay flagged in red on top of the heat map.
+An ordinary spectrogram paints each bin's energy at the bin's nominal frequency and the frame's nominal time. A steady tone therefore smears across the window's main lobe, and a click smears across every frame that overlaps it.
 
-### 🎛️ 6. A Real Player
-Transport controls, sample-accurate seeking by clicking the waveform, drag-to-select with loop regions, gain and pan, per-channel mute and solo, keyboard-driven navigation, and a clear readout of what the file actually *is* — rate, depth, channels, codec, duration and container tags. Open by double-click, drag-and-drop, `Ctrl+O` or a command-line argument.
+**Reassignment** computes two extra transforms per frame, against the time-weighted window and the derivative window. Those give, for each bin, where the energy actually sits in time and what frequency it actually has, and the cell is painted there instead. Tones collapse to hairlines and clicks to single columns. Switch it on in Settings. It costs three FFTs per frame instead of one.
 
-### 🗂️ 7. A Side Panel Worth Reading
+Cells more than 70 dB below the frame's peak stay where a plain STFT would put them, because down there the estimates are dominated by leakage and point nowhere useful. Everything else is stored with its *sub-bin position*, one extra byte per cell. Rounding to whole bins would turn a gliding harmonic into a staircase, and smearing it across neighbouring bins would triple the line's width. Keeping the fraction holds lines one bin thin and lets them glide.
 
-The right-hand panel is a stack of cards, one typeface, one type scale. **File**: name, folder, container, codec, rate, layout, depth, duration, frames, size on disk, bit rate, footprint in memory, modified time. **WAVE header**, read straight from the RIFF/RF64 structure rather than from the decoder: the raw `fmt ` fields, and every chunk with its offset and size. **Broadcast Wave**, when a `bext` chunk is present: description, originator, reference, origination date and time, the time reference as a timecode, UMID, and the v2 loudness fields and coding history. **Tags** from `LIST INFO` and from the container, **Markers** from `cue ` chunks with their labels. **Loudness**: the R128 set plus the distance to the −23, −16 and −14 LUFS targets, headroom to 0 dBTP and crest factor. **Levels**: per-channel peak, true peak and RMS as bars on a 60 dB scale, with clip and DC warnings and mute/solo. **Analysis**: what the spectrogram is actually computing — window, hop, resolution, reassignment, the detail tile in use, the visible range. **Cursor**: playhead, pointer, selection and loop.
+**Palettes.** *Amber* is blue in the quiet half and orange above. *Ember* keeps the warmth without the blue, for use over a blue waveform. *Custom* takes three colours of your own over black, with a live preview strip. Magma, Inferno, Viridis, Plasma, Turbo and Grey are there too. The waveform colour is pickable as well, so the two views never have to share a hue.
 
-Text is set in [JetBrains Mono Nerd Font](https://www.nerdfonts.com/), bundled: the proportional cut for labels, the mono cut for numbers so columns line up, and its icon glyphs for the card headers. Every size in the app comes from one type scale.
-
-### 🔒 8. Read-Only by Design
-Destructive editing is explicitly out of scope. Auriscope opens files and never writes to them. Your settings persist between runs; your audio does not change.
+</details>
 
 ---
 
 ## 🏛️ Architecture
-
-Three rules shape everything:
-
-1. **The audio callback never blocks.** No locks, no allocation, no file I/O, no logging on that thread. An underrun is an audible click, and clicks in a tool people use to *hunt* for clicks are unacceptable.
-2. **Nothing waits on the audio callback either.** If the analysis tap falls behind, the callback drops frames into it. It never waits for space.
-3. **Seeks are generation-stamped.** Every seek bumps an atomic counter. Chunks in the playback ring carry the generation they were produced under, and the callback discards any stale one. That is what makes a seek flush correct without a lock.
 
 ```mermaid
 flowchart TD
@@ -182,81 +153,108 @@ flowchart TD
     class RT hot;
 ```
 
-*   **Decoder** does two jobs. On open it runs a full background pass that builds everything the views need — the peak/RMS pyramid, the spectrogram tiles, the loudness measurements and the clip/DC/correlation statistics — reporting progress so the UI can draw partial results as they arrive. During playback it decodes ahead of the playhead, resamples if needed, maps channels, and pushes generation-tagged chunks into the playback ring.
-*   **Audio callback** copies from the ring, drops stale generations, applies gain and pan, converts to the device sample format, and hands frames to the device. It publishes its playhead through an atomic and copies a tap of each buffer out for the live FFT.
-*   **Live FFT** consumes that tap and produces the realtime spectrum only. It is *not* the source of the spectrogram.
-*   **UI** owns no audio state. It reads atomics, the cached analysis results and the tap ring, and draws. If it stutters, the audio does not.
+Three rules shape everything:
 
-### 🔀 Two analysis paths, not one
+1. **The audio callback never blocks.** No locks, no allocation, no file I/O and no logging on that thread. An underrun is an audible click, and clicks in a tool built to hunt for clicks are unacceptable.
+2. **Nothing waits on the audio callback either.** If the analysis tap falls behind, the callback drops frames into it rather than waiting for space.
+3. **Seeks are generation-stamped.** Every seek bumps an atomic counter. Chunks carry the generation they were made under, and the callback throws away any stale one. That is what makes a seek flush correct without a lock.
 
-The whole-file **spectrogram** is an offline STFT computed during the open pass and cached as 8-bit dB columns, max-pooled into coarser levels so that zooming out selects a level rather than recomputing. The **realtime spectrum** is a separate FFT over whatever just went to the device. Keeping these apart is what lets the spectrogram be instant and the live view be honest — a spectrogram fed from the playback tap would fill in only as you listen, which is useless for diagnosis.
+<details>
+<summary><b>Thread roles, the two analysis paths, memory and seeking</b></summary>
 
-### 💾 Memory model
+**The decoder** does two jobs. On open it runs a full background pass that builds the pyramid, the spectrogram tiles, the loudness numbers and the clip, DC and correlation statistics, reporting progress so the UI can draw partial results as they arrive. During playback it decodes ahead of the playhead, resamples, maps channels and pushes generation-tagged chunks into the ring.
 
-The open pass needs every sample once, and playback needs random access for seeking, so decoded PCM is cached in RAM as `f32`. The intended design caps this (default 2 GB, roughly 90 minutes of 48 kHz stereo) and falls back to re-decoding from disk above the cap, keeping only the pyramid, tiles and measurements. A two-hour 96 kHz stereo file is about 5.5 GB as `f32`, so the fallback is not theoretical — but it is **not implemented yet**, see [Known gaps](#known-gaps).
+**The audio callback** copies from the ring, drops stale generations, applies gain and pan, and converts to the device format. It publishes its playhead through an atomic and taps each buffer for the live FFT.
 
-### ⏱️ Seeking is format-dependent
+**The UI** owns no audio state. It reads atomics, cached results and the tap ring, then draws. If it stutters, the audio does not.
 
-WAV, AIFF and FLAC seek exactly. MP3 and AAC seek to the nearest packet and then decode-and-discard to the target sample, honouring encoder delay and padding from gapless metadata where present. The UI promises sample accuracy and the decoder delivers it, but the cost differs by codec.
+**Two analysis paths, not one.** The whole-file spectrogram is an offline STFT cached as 8-bit dB columns, max-pooled into coarser levels so that zooming out picks a level rather than recomputing. The realtime spectrum is a separate FFT over the playback tap. Keeping the two apart is what lets the spectrogram be instant. One fed from the tap would fill in only as you listen, which is useless for diagnosis.
 
----
+**Memory.** The open pass needs every sample once and seeking needs random access, so decoded PCM is cached in RAM as `f32`. The intended design caps this at 2 GB by default, roughly 90 minutes of 48 kHz stereo, and falls back to re-decoding from disk above the cap. That fallback is **not implemented yet**, see the [Roadmap](#-roadmap).
 
-## 🛠️ Tech Stack
+**Seeking depends on the format.** WAV, AIFF and FLAC seek exactly. MP3 and AAC seek to the nearest packet, then decode and discard up to the target sample, honouring encoder delay and padding. You get sample accuracy either way, but the cost differs.
 
-Rust throughout. The choices are deliberate; the reasoning matters more than the versions.
+</details>
+
+<details>
+<summary><b>Tech stack, and why each crate</b></summary>
 
 | Concern | Crate | Why |
 | :--- | :--- | :--- |
-| **GUI** | `eframe` / `egui` 0.36 | Immediate-mode, which suits a UI that redraws continuously anyway. One static binary per platform with no GTK/Qt/webview dependency chain — the single biggest saving on Windows packaging. |
-| **Rendering** | `wgpu` via `eframe` | The spectrogram is a GPU texture, not a CPU-blitted image. Vulkan on Linux, DX12 on Windows, same code. |
-| **Decoding** | `symphonia` 0.6 | Pure Rust. WAV, AIFF, CAF, FLAC, ALAC, APE, MP3, AAC, OGG/Vorbis and Matroska with no FFmpeg to link, licence-audit or ship. Lossy codecs sit behind feature flags, enabled explicitly in `Cargo.toml`. |
-| **Output** | `cpal` 0.18 | PipeWire/ALSA on Linux, WASAPI on Windows, one API. |
-| **FFT** | `realfft` 3.5 | Wraps `rustfft` but exploits real-valued input — roughly twice the throughput, which matters when the whole file is transformed on open. |
-| **Resampling** | `rubato` 5.0 | High-quality async sinc resampling for files whose rate does not match the output device. |
-| **Loudness** | `ebur128` | Reference R128 implementation, run in the same pass as the pyramid. |
-| **Thread plumbing** | `rtrb` 0.4 | Lock-free SPSC ring buffers, for both the playback ring and the analysis tap. |
-| **Colour maps** | `colorous` + one of our own | Amber (black, navy, blue, orange, amber, white — the default), plus magma, inferno, viridis, plasma and turbo from `colorous`. A contrast gamma sits on top of whichever is chosen. |
+| **GUI** | `eframe` / `egui` 0.36 | Immediate-mode, which suits a UI that redraws continuously anyway. One static binary per platform, with no GTK, Qt or webview chain behind it. |
+| **Rendering** | `wgpu` via `eframe` | The spectrogram is a GPU texture. Vulkan on Linux, DX12 on Windows, same code. |
+| **Decoding** | `symphonia` 0.6 | Pure Rust. WAV, AIFF, CAF, FLAC, ALAC, APE, MP3, AAC, OGG/Vorbis and Matroska, with no FFmpeg to link, audit or ship. |
+| **Output** | `cpal` 0.18 | PipeWire and ALSA on Linux, WASAPI on Windows, one API. |
+| **FFT** | `realfft` 3.5 | Exploits real-valued input for roughly twice the throughput, which matters when the whole file is transformed on open. |
+| **Resampling** | `rubato` 5.0 | High-quality async sinc, for files whose rate does not match the device. |
+| **Loudness** | `ebur128` | The reference R128 implementation, run in the same pass as the pyramid. |
+| **Thread plumbing** | `rtrb` 0.4 | Lock-free SPSC rings, for both the playback ring and the analysis tap. |
+| **Colour maps** | `colorous` plus our own | Amber and Ember are ours. Magma, inferno, viridis, plasma and turbo come from `colorous`. |
 | **File dialogs** | `rfd` | Native open dialogs on both platforms. |
 
-> **GUI choice, stated plainly: egui over Tauri.** Tauri would mean drawing a spectrogram into a canvas from JavaScript and moving audio frames across the webview boundary sixty times a second. For a tool whose entire job is high-rate custom drawing, that boundary is the wrong place to be.
+**Why egui and not Tauri.** Tauri would mean drawing a spectrogram into a canvas from JavaScript and moving audio frames across the webview boundary sixty times a second. For a tool whose whole job is high-rate custom drawing, that boundary is the wrong place to be.
+
+Text is set in [JetBrains Mono Nerd Font](https://www.nerdfonts.com/), bundled: the proportional cut for labels, the mono cut so numeric columns line up, and its icon glyphs for the card headers. Every size in the app comes from one type scale.
+
+</details>
+
+---
+
+## ⌨️ Keyboard and mouse
+
+| Key | Action | | Gesture | Action |
+| :--- | :--- | :-- | :--- | :--- |
+| `Space` | Play / pause | | Click | Seek |
+| `←` `→` | Seek 5 s (`Shift` for 1 s) | | Drag | Select |
+| `Home` `End` | Jump to start / end | | Scroll | Zoom at the pointer |
+| `L` | Loop the ruler range | | `Shift`+scroll | Pan |
+| `F` / `Shift+F` | Zoom to selection / fit file | | `Alt+Shift`+scroll | Vertical waveform zoom |
+| `+` `-` | Zoom in / out | | Middle-drag | Scroll sideways |
+| `Esc` | Clear highlight, then range | | Right-click | Clear highlight and range |
+| `Ctrl+O` `Ctrl+,` | Open file / settings | | Drag divider | Rebalance panes (double-click resets) |
+
+Selection works the way a DAW's does. Dragging highlights a region and also sets a range on the time ruler, shown as a band with a handle at each end. The next click clears the highlight but leaves the range, so you can seek around inside it. The band turns green while looping. Vertical zoom runs from 0.1x to 4096x, about 72 dB, which is enough to lift a noise floor to full height.
 
 ---
 
 ## 🗺️ Roadmap
 
-| | Milestone | What it contains |
-| :---: | :--- | :--- |
-| ✅ | **M0 — it builds** | Cargo skeleton, pinned stable toolchain, dependency feature flags, dev-profile optimisation for dependencies, CI building and testing on Linux and Windows. |
-| ✅ | **M1 — it plays** | Any Symphonia-decodable file through cpal, transport controls, rate mismatch via Rubato, channel mismatch via a mapping step, generation-stamped seeking, mute/solo, gain and pan. |
-| ✅ | **M2 — it draws** | Waveform from the peak/RMS pyramid, clip highlighting, click-to-seek, drag-to-select, wheel pan, pinch and ctrl-wheel zoom, playhead following, drag-and-drop and CLI open. |
-| ✅ | **M3 — it analyses** | Offline per-channel spectrogram with max-pooled zoom levels, linear and log frequency axes, hover readout, realtime spectrum with averaging and peak hold, window/overlap/function controls, dB floor and ceiling, perceptual colour maps. |
-| ✅ | **M4 — it measures** | Integrated, short-term and momentary LUFS, loudness range, sample and true peak, clipped sample and run counts, DC offset, RMS, stereo correlation, metadata and tag panel, loop regions, keyboard navigation, persisted settings. *Not yet:* A/B markers. |
-| 🔶 | **M5 — it ships** | GitHub releases with Linux and Windows archives ✅, in-app new-version notice for those archives ✅, Flathub as `io.github.frdcmp.Auriscope` (submitted), AUR (packaged, not yet published), a winget manifest so Windows updates through `winget upgrade`, and an icon resource on the `.exe`. |
+What is left to do.
 
-### Known gaps
-
-*   **Large files.** The streaming fallback above the PCM cache cap is not implemented: every file is decoded fully into RAM. The 8-bit spectrogram cache also lives in RAM, roughly one byte per STFT cell per channel.
-*   **Spectrogram on the GPU.** The spectrogram is uploaded as a texture, but the log-frequency mapping and resampling for the visible region are done on the CPU into a viewport-sized image whenever the view changes. A shader doing that sampling is the intended end state. The on-demand detail tiles would stay as they are: they add data the GPU does not have, not just a faster way to draw it.
-*   **Live spectrum thread.** The realtime FFT runs on the UI thread from the tap ring, not on its own thread. It is one 4096-point real FFT per frame and has not been a problem; it will move if it ever is.
-*   **Untested on Windows.** It compiles there in CI. Nobody has heard it.
+| | To do |
+| :---: | :--- |
+| 🧠 | **Large files.** The streaming fallback above the PCM cache cap is not implemented, so every file is decoded fully into RAM. |
+| 🎮 | **Spectrogram on the GPU.** It uploads as a texture, but the log-frequency mapping and resampling still happen on the CPU into a viewport-sized image. A shader is the intended end state. |
+| 🧵 | **Live spectrum thread.** The realtime FFT runs on the UI thread. One 4096-point real FFT per frame has not been a problem, and it moves off if it ever becomes one. |
+| 🪟 | **Windows.** It compiles there in CI, but nobody has heard it. It also still wants an icon resource on the `.exe`, file associations for double-click open, and a winget manifest. |
+| 📦 | **Distribution.** Flathub is submitted and waiting. The AUR package is written but not published. |
+| 🔖 | **A/B markers.** Drop two marks and jump between them. |
 
 ---
 
-## 🔨 Building from Source
+## 🔨 Building from source
 
-### Running the newest code
-
-Releases are the tested versions. To run what is on `main` right now instead:
+You need a stable Rust toolchain, and `rust-toolchain.toml` pins the exact version. Linux needs ALSA headers and GTK 3 for the file dialog. Windows needs nothing extra.
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/frdcmp/auriscope/main/install.sh | bash -s -- --git
+sudo pacman -S alsa-lib gtk3                   # Arch
+sudo apt install libasound2-dev libgtk-3-dev   # Debian / Ubuntu
+
+cargo run -- path/to/file.flac
 ```
 
-That clones `main` into `~/.cache/auriscope-src` (reusing and resetting it on later runs), builds in release mode and installs exactly as the normal path does. Run it again whenever you want to move forward; it always takes the newest commit, so there is nothing to compare and it always rebuilds.
+Debug builds are usable, because `Cargo.toml` compiles dependencies at `opt-level = 3` while keeping your own code at debug settings. Use `--release` for benchmarking and for anything you intend to ship, and expect a few minutes, since that profile uses fat LTO with one codegen unit.
 
-From a clone you already have, `./install.sh --source` builds **your working tree** — your own edits included — while `./install.sh --git` ignores it and takes GitHub's `main`.
+<details>
+<summary><b>Running the newest <code>main</code>, dev build stamps and Arch packaging</b></summary>
 
-A development build says so. `--version` and the About card carry the `git describe` stamp, so you can tell one from a release:
+```bash
+curl -fsSL .../install.sh | bash -s -- --git    # clone main, build, install
+./install.sh --source                           # build YOUR working tree instead
+cd packaging/arch/auriscope-git && makepkg -si  # Arch equivalent, managed by pacman
+```
+
+`--git` clones into `~/.cache/auriscope-src`, reusing and resetting it on later runs, and always takes the newest commit. A development build says so, through the `git describe` stamp in `--version` and in the About card:
 
 ```console
 $ auriscope --version
@@ -264,150 +262,72 @@ $ auriscope --version
 0.1.1 (dev v0.1.1-7-g1a2b3c4)      # seven commits past v0.1.1
 ```
 
-Installing a release over a development build always proceeds rather than reporting "already current", which is how you go back to a tested version:
+Installing a release over a development build always goes ahead rather than reporting "already current". That is how you get back to a tested version.
 
-```bash
-./install.sh --force               # or just: install.sh, which sees the dev stamp
-```
-
-**Arch users** have a packaged equivalent that `pacman` then manages, versioned the usual `-git` way:
-
-```bash
-cd packaging/arch/auriscope-git && makepkg -si
-```
-
-### Building by hand
-
-Requires a stable Rust toolchain — `rust-toolchain.toml` pins the exact version. Linux needs ALSA development headers, which PipeWire systems still use for the cpal backend, plus GTK 3 for the native file dialog; Windows needs nothing extra, since WASAPI and DX12 are part of the OS.
-
-```bash
-# Arch
-sudo pacman -S alsa-lib gtk3
-# Debian / Ubuntu
-sudo apt install libasound2-dev libgtk-3-dev
-
-cargo run -- path/to/file.flac
-```
-
-> Debug builds are usable because `Cargo.toml` compiles *dependencies* at `opt-level = 3` while keeping your own code at debug settings. Use `--release` for benchmarking and for anything you intend to ship — expect a few minutes, since the release profile uses fat LTO with a single codegen unit. `./install.sh --source` does that build and installs the result.
-
----
-
-## ⌨️ Keyboard
-
-| Key | Action |
-| :--- | :--- |
-| `Space` | Play / pause |
-| `←` `→` | Seek ∓5 s (hold `Shift` for 1 s) |
-| `Home` `End` | Jump to start / end |
-| Drag | Select. The highlight is transient; the range it made stays on the ruler |
-| Click | Seek, and drop the highlight. The ruler range stays |
-| Ruler handles | Drag either end of the range |
-| Right-click | Clear highlight and range |
-| `L` | Loop the ruler range |
-| `F` / `Shift+F` | Zoom to the highlight or range / fit whole file |
-| `+` `-` | Zoom in / out |
-| Middle-drag | Grab and scroll the clip sideways |
-| Drag divider | Rebalance waveform against spectrogram (double-click resets) |
-| `Esc` | Clear the highlight; press again to clear the range and loop |
-| `Ctrl+O` | Open a file |
-| `Ctrl+,` | Open the settings dialog |
-
-Click the waveform to seek, drag to select, scroll to zoom at the pointer, `Shift`-scroll to pan, and pinch or `Ctrl`-scroll to zoom. `Alt+Shift`-scroll scales the waveform vertically, from 0.1x to 4096x, which is about 72 dB of boost and enough to lift a noise floor to full height. The side panel carries the same control as a slider with a reset.
-
-Selection works the way a DAW's does. Dragging highlights a region in the waveform and spectrogram and also sets a *range* on the time ruler, shown as a band with a handle at each end. The next click clears the highlight but leaves the range, so you can seek around inside it; the loop plays the range, the handles adjust it, and the ruler band turns green while looping. Right-click or a second `Esc` clears it.
+</details>
 
 ---
 
 ## 🧪 Testing
 
-No audio files are committed — the tests synthesise their own signals:
-
-*   A sine at a known frequency must land in the **expected FFT bin at the expected magnitude**, for every supported window function.
-*   A synthetic ramp validates **min/max/RMS at every pyramid level**.
-*   A generated WAV **round-trips through Symphonia sample-exact**.
-*   An EBU R128 reference tone must measure **−23.0 LUFS within tolerance**.
-*   The resampling feeder must convert 44.1 → 48 kHz with the tone frequency and peak level preserved, with no audio device involved.
-
-This forces the analysis code to live in a library crate the tests can call, which is also what keeps the UI thin.
+No audio files are committed. The tests synthesise their own signals: a sine that must land in the expected FFT bin at the expected magnitude for every window function, min, max and RMS checked at every pyramid level, a WAV that round-trips through Symphonia sample-exact, an R128 reference tone that must measure −23.0 LUFS within tolerance, and a 44.1 to 48 kHz conversion with the tone frequency and peak level preserved. This forces the analysis code into a library crate the tests can call, which is also what keeps the UI thin.
 
 ```bash
 cargo test
 cargo clippy --all-targets -- -D warnings
 ```
 
-Two development tools exercise what unit tests cannot reach:
+<details>
+<summary><b>Development tools: playback harness, screenshots, spectrogram benchmark</b></summary>
 
 ```bash
-# Decode, play through the real device for 3 s, seek to 1.5 s mid-play, and
-# report playhead progress, tap throughput and underruns. No window.
+# Play through the real device for 3 s, seek to 1.5 s mid-play, and report
+# playhead progress, tap throughput and underruns. No window.
 cargo run --example play -- file.wav 3 1.5
 
-# Open a file, wait for analysis, start playback, capture one frame to PPM
-# and exit. This is how the screenshot above was made.
+# Capture one frame to PPM and exit. This is how the screenshot was made.
 AURISCOPE_SCREENSHOT=shot.ppm cargo run -- file.wav
-
-# Same, but framed on a time range in seconds, which exercises the
-# high-resolution detail-tile path instead of the whole-file view.
-AURISCOPE_SCREENSHOT=shot.ppm AURISCOPE_SCREENSHOT_ZOOM=1.00,1.06 \
-  cargo run -- file.wav
-
-# Open with the settings dialog up (`=end` scrolls it to the last card), or
-# with a looped range on the ruler.
-AURISCOPE_SCREENSHOT=shot.ppm AURISCOPE_SCREENSHOT_SETTINGS=1 cargo run -- file.wav
-AURISCOPE_SCREENSHOT=shot.ppm AURISCOPE_SCREENSHOT_RANGE=0.4,0.9 cargo run -- file.wav
 ```
 
-Time the spectrogram path on a real file — whole-file STFT, detail tiles and the viewport render at four zoom levels, with and without reassignment:
+Screenshot variants: `AURISCOPE_SCREENSHOT_ZOOM=1.00,1.06` frames a time range, which exercises the detail-tile path; `AURISCOPE_SCREENSHOT_SETTINGS=1` opens with the settings dialog up, and `=end` scrolls it to the last card; `AURISCOPE_SCREENSHOT_RANGE=0.4,0.9` sets a looped range on the ruler.
 
 ```bash
-cargo run --release --example bench_spec -- file.wav 2048 4   # window size, overlap denominator
-AURISCOPE_THREADS=1 cargo run --release --example bench_spec -- file.wav   # force single-threaded
+# Time the whole-file STFT, the detail tiles and the viewport render at four
+# zoom levels, with and without reassignment.
+cargo run --release --example bench_spec -- file.wav 2048 4
+AURISCOPE_THREADS=1 cargo run --release --example bench_spec -- file.wav
 ```
 
-`AURISCOPE_THREADS` caps the worker threads used by tile analysis and rendering anywhere in the app; the harness also checks that the parallel tile matches the single-threaded one cell for cell.
+`AURISCOPE_THREADS` caps the worker threads used for tile analysis and rendering anywhere in the app. The harness also checks the parallel tile against the single-threaded one, cell for cell.
+
+</details>
 
 ---
 
 ## 📦 Packaging
 
-Everything a distribution needs lives in the repo: the desktop entry and AppStream metainfo in `assets/`, and the recipes under `packaging/`. All of them build from a version tag, so **tag first** (`git tag v0.1.0 && git push --tags`); the release workflow then attaches Linux and Windows archives to the GitHub release. The full step-by-step, from version bump to Flathub and AUR, is in [RELEASING.md](RELEASING.md).
+Everything a distribution needs is in the repo: the desktop entry and AppStream metainfo in `assets/`, the recipes under `packaging/`. They all build from a version tag, so **tag first** (`git tag v0.1.0 && git push --tags`), and the release workflow then attaches the Linux and Windows archives. The full step-by-step is in [RELEASING.md](RELEASING.md).
 
-### Update check
+<details>
+<summary><b>Update check, Flatpak, Arch and Windows specifics</b></summary>
 
-Builds with the `update-check` feature (on by default; the GitHub release archives have it) ask `api.github.com` for the latest release at startup, at most once a day, and show a small *"0.2.0 available"* button in the transport bar that opens the release page. Nothing is downloaded and nothing about the machine is sent beyond an ordinary HTTPS request; the check can be turned off in Settings → About, and a version can be skipped. Flatpak and AUR builds are compiled without it (`--no-default-features`) because their package manager is the update channel and Flathub does not allow apps to check on their own.
+**Update check.** Builds with the `update-check` feature, on by default and present in the release archives, ask `api.github.com` for the latest release at startup, at most once a day, and show a small *"0.2.0 available"* button in the transport bar. Nothing is downloaded, and nothing about the machine is sent beyond an ordinary HTTPS request. You can turn it off in Settings → About, or skip a version. Flatpak and AUR builds leave it out (`--no-default-features`), since their package manager is the update channel.
 
-### Flatpak / Flathub
-
-`packaging/flatpak/io.github.frdcmp.Auriscope.yml` builds against the freedesktop 25.08 runtime with the Rust SDK extension. Flathub builds offline, so every crate in `Cargo.lock` is listed in `cargo-sources.json`; regenerate it whenever the lockfile changes:
+**Flatpak.** `packaging/flatpak/io.github.frdcmp.Auriscope.yml` builds against the freedesktop 25.08 runtime with the Rust SDK extension. Flathub builds offline, so every crate in `Cargo.lock` is listed in `cargo-sources.json`. Regenerate it whenever the lockfile changes:
 
 ```bash
 python3 packaging/flatpak/gen-cargo-sources.py Cargo.lock -o packaging/flatpak/cargo-sources.json
-```
-
-The Flatpak build uses `--no-default-features --features portal`, which routes the Open dialog through the XDG file-chooser portal instead of GTK, so the sandbox needs no filesystem permission, and leaves out the update check: `--socket=wayland`, `--socket=fallback-x11`, `--device=dri` for wgpu and `--socket=pulseaudio` for cpal are the whole list. Build and try it locally:
-
-```bash
 flatpak install flathub org.freedesktop.Sdk//25.08 org.freedesktop.Sdk.Extension.rust-stable//25.08
 flatpak-builder --user --install --force-clean build-dir packaging/flatpak/io.github.frdcmp.Auriscope.yml
-flatpak run io.github.frdcmp.Auriscope file.wav
 ```
 
-To submit: set `tag` and `commit` in the manifest, fork `flathub/flathub`, branch from `new-pr`, add the manifest and `cargo-sources.json`, open a pull request. The app ID is under `io.github.frdcmp`, so Flathub can verify ownership through GitHub.
+The build uses `--no-default-features --features portal`, which routes the Open dialog through the XDG portal, so the sandbox needs no filesystem permission. Its whole permission list is `--socket=wayland`, `--socket=fallback-x11`, `--device=dri` for wgpu and `--socket=pulseaudio` for cpal. To submit: set `tag` and `commit` in the manifest, fork `flathub/flathub`, branch from `new-pr`, add the manifest and `cargo-sources.json`, and open a pull request. The app ID sits under `io.github.frdcmp`, so Flathub can verify ownership through GitHub.
 
-### Arch Linux
+**Arch.** `packaging/arch/auriscope/PKGBUILD` builds the tagged release. `packaging/arch/auriscope-git/PKGBUILD` builds `main` and needs no release and no AUR account. To publish: `updpkgsums`, `makepkg --printsrcinfo > .SRCINFO`, then push to `ssh://aur@aur.archlinux.org/auriscope.git`.
 
-`packaging/arch/auriscope/PKGBUILD` builds the tagged release tarball; `packaging/arch/auriscope-git/PKGBUILD` builds `main` and works without any release or AUR account:
+**Windows.** `#![windows_subsystem = "windows"]` hides the console, and the workflow ships a zip. The window and taskbar icon are set at runtime. Still missing: an icon resource on the `.exe`, file associations for double-click open, and a winget manifest.
 
-```bash
-cd packaging/arch/auriscope-git && makepkg -si
-```
-
-Publishing the release package to the AUR: `updpkgsums`, `makepkg --printsrcinfo > .SRCINFO`, then push `PKGBUILD` and `.SRCINFO` to `ssh://aur@aur.archlinux.org/auriscope.git`.
-
-### Windows
-
-`#![windows_subsystem = "windows"]` hides the console and the release workflow ships a zip. The window and taskbar icon are set at runtime from the embedded icon; still missing: an icon resource on the `.exe` itself, file associations for double-click open, and a winget manifest so `winget upgrade` can replace the in-app update notice.
+</details>
 
 ---
 
@@ -415,10 +335,10 @@ Publishing the release package to the AUR: `updpkgsums`, `makepkg --printsrcinfo
 
 **GPL-3.0-or-later.** Anyone may use it. Anyone who changes it and distributes it must publish their changes under the same terms. See [LICENSE](LICENSE).
 
-The bundled JetBrains Mono Nerd Font (`assets/fonts/`) is © The JetBrains Mono Project Authors, licensed under the SIL Open Font License 1.1 (`assets/fonts/OFL.txt`); the Nerd Fonts glyph patch is MIT.
+The bundled JetBrains Mono Nerd Font (`assets/fonts/`) is © The JetBrains Mono Project Authors under the SIL Open Font License 1.1 (`assets/fonts/OFL.txt`). The Nerd Fonts glyph patch is MIT.
 
-## 🤔 Open decisions
+### Open decisions
 
-*   **PCM cache cap** — 2 GB default described above; the cap and the streaming fallback are not implemented yet.
-*   **Plugin hosting** — whether to ever load CLAP/VST3 for analysis plugins. Probably not; it conflicts with "player, not editor".
-*   **File formats beyond Symphonia's set** — Opus and WavPack would need additional crates.
+*   **PCM cache cap.** The 2 GB default and the streaming fallback are not implemented yet.
+*   **Plugin hosting.** Whether to ever load CLAP or VST3 analysis plugins. Probably not, since it conflicts with "player, not editor".
+*   **Formats beyond Symphonia's set.** Opus and WavPack would need extra crates.

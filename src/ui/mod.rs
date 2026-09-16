@@ -235,6 +235,9 @@ pub struct App {
     screenshot: Option<(PathBuf, Option<Instant>)>,
 }
 
+/// Gap between a checkbox or radio button and its label.
+const ICON_GAP: f32 = 7.0;
+
 impl App {
     pub fn new(cc: &eframe::CreationContext<'_>, initial: Option<PathBuf>) -> Self {
         let settings: Settings = cc
@@ -246,6 +249,10 @@ impl App {
         // what actually sticks.
         cc.egui_ctx.set_theme(egui::ThemePreference::Dark);
         fonts::install(&cc.egui_ctx);
+        // egui's default of 4 px sets a checkbox's box almost against its
+        // label. A little more air reads better, everywhere at once.
+        cc.egui_ctx
+            .all_styles_mut(|s| s.spacing.icon_spacing = ICON_GAP);
         let pending_open = initial.or_else(|| settings.last_file.clone());
         let mut updater = update::Updater::default();
         if update::ENABLED

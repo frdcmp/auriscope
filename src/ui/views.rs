@@ -347,9 +347,8 @@ fn interact(app: &mut App, ui: &egui::Ui, resp: &egui::Response, surface: Surfac
                 let anchor = x_to_frame(&app.view, rect, p.x);
                 app.view.zoom(zoom as f64, anchor, total, 64.0);
             } else if shift && alt {
-                // Sound Forge style: Alt+Shift+wheel scales the waveform
-                // vertically (around the zero line) without touching the
-                // time axis.
+                // Alt+Shift+wheel scales the waveform vertically (around
+                // the zero line) without touching the time axis.
                 if is_wave && scroll.y.abs() > 0.0 {
                     // Geometric, so each notch is the same proportional step
                     // wherever you are in a range spanning four decades.

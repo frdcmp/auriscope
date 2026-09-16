@@ -102,8 +102,8 @@ impl ColorMap {
 }
 
 /// Black through deep navy and blue, across a muted bridge into orange,
-/// amber and near-white: the palette that restoration-suite spectrograms are
-/// known for. Quiet material sits in the blues, anything that matters glows.
+/// amber and near-white. Quiet material sits in the blues, anything that
+/// matters glows.
 const AMBER_STOPS: [(f64, [u8; 3]); 7] = [
     (0.00, [0, 0, 0]),
     (0.18, [8, 18, 56]),
