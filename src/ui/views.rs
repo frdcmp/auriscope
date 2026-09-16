@@ -1,6 +1,8 @@
 //! Time ruler, waveform and spectrogram. They share one `View` and one set
-//! of mouse gestures: click seeks, drag selects, wheel pans, ctrl-wheel or
-//! pinch zooms.
+//! of mouse gestures: click seeks, drag selects, wheel zooms at the pointer,
+//! shift-wheel pans, alt-shift-wheel scales the waveform vertically, ctrl-wheel
+//! or pinch also zoom. Zoomed in past ~4 samples per pixel the waveform is
+//! drawn as a polyline through the samples; further out as a min/max envelope.
 
 use eframe::egui;
 use egui::{
@@ -58,8 +60,13 @@ pub fn central(app: &mut App, root: &mut egui::Ui) {
             app.hover_info.clear();
 
             // Interaction is shared: any of the three strips drives the view.
-            for resp in [&ruler_resp, &wave_resp, &spec_resp] {
-                interact(app, ui, resp);
+            // Only the waveform strip gets the vertical-zoom gesture.
+            for (resp, is_wave) in [
+                (&ruler_resp, false),
+                (&wave_resp, true),
+                (&spec_resp, false),
+            ] {
+                interact(app, ui, resp, is_wave);
             }
 
             draw_ruler(app, &ruler_p, ruler_resp.rect);
@@ -92,7 +99,7 @@ pub fn x_to_frame(view: &View, rect: Rect, x: f32) -> f64 {
 
 // ---- input -----------------------------------------------------------------
 
-fn interact(app: &mut App, ui: &egui::Ui, resp: &egui::Response) {
+fn interact(app: &mut App, ui: &egui::Ui, resp: &egui::Response, is_wave: bool) {
     if app.audio.is_none() {
         return;
     }
@@ -136,24 +143,59 @@ fn interact(app: &mut App, ui: &egui::Ui, resp: &egui::Response) {
     }
 
     if resp.hovered() {
-        let (scroll, zoom) = ui.input(|i| (i.smooth_scroll_delta, i.zoom_delta()));
+        let (scroll, zoom, shift, alt) = ui.input(|i| {
+            (
+                i.smooth_scroll_delta,
+                i.zoom_delta(),
+                i.modifiers.shift,
+                i.modifiers.alt,
+            )
+        });
         if let Some(p) = resp.hover_pos() {
             if (zoom - 1.0).abs() > 1e-4 {
                 let anchor = x_to_frame(&app.view, rect, p.x);
                 app.view.zoom(zoom as f64, anchor, total, 64.0);
-            }
-            let pan = if scroll.x.abs() > scroll.y.abs() {
-                scroll.x
-            } else {
-                scroll.y
-            };
-            if pan.abs() > 0.0 {
-                let frames = -(pan / rect.width().max(1.0)) as f64 * app.view.len();
-                app.view.start += frames;
-                app.view.end += frames;
-                app.view.clamp_to(total);
+            } else if shift && alt {
+                // Sound Forge style: Alt+Shift+wheel scales the waveform
+                // vertically (around the zero line) without touching the
+                // time axis.
+                if is_wave && scroll.y.abs() > 0.0 {
+                    let factor = (scroll.y / 200.0).exp();
+                    if (factor - 1.0).abs() > 1e-4 {
+                        app.settings.wave_v_zoom =
+                            (app.settings.wave_v_zoom * factor).clamp(0.25, 64.0);
+                    }
+                }
+            } else if shift {
+                // Shift+wheel pans. Some input stacks remap shift+wheel to a
+                // horizontal scroll, so pan by whichever axis carries it.
+                let amount = if scroll.x.abs() > scroll.y.abs() {
+                    scroll.x
+                } else {
+                    scroll.y
+                };
+                pan(app, rect, total, amount);
+            } else if scroll.y.abs() >= scroll.x.abs() && scroll.y.abs() > 0.0 {
+                // Plain wheel zooms at the pointer, at the same speed as
+                // Ctrl+wheel (egui's scroll_zoom_speed).
+                let factor = (scroll.y / 200.0).exp();
+                if (factor - 1.0).abs() > 1e-4 {
+                    let anchor = x_to_frame(&app.view, rect, p.x);
+                    app.view.zoom(factor as f64, anchor, total, 64.0);
+                }
+            } else if scroll.x.abs() > 0.0 {
+                pan(app, rect, total, scroll.x);
             }
         }
+    }
+}
+
+fn pan(app: &mut App, rect: Rect, total: f64, amount: f32) {
+    if amount.abs() > 0.0 {
+        let frames = -(amount / rect.width().max(1.0)) as f64 * app.view.len();
+        app.view.start += frames;
+        app.view.end += frames;
+        app.view.clamp_to(total);
     }
 }
 
@@ -222,6 +264,7 @@ fn draw_waveform(app: &App, p: &egui::Painter, rect: Rect) {
     let ch_h = rect.height() / nch as f32;
     let width = rect.width().max(1.0) as usize;
     let show_rms = app.settings.show_rms;
+    let vz = app.settings.wave_v_zoom;
 
     for ch in 0..nch {
         let top = rect.top() + ch_h * ch as f32;
@@ -239,7 +282,6 @@ fn draw_waveform(app: &App, p: &egui::Painter, rect: Rect) {
                 Stroke::new(1.0, Color32::from_gray(40)),
             );
         }
-        let bins = pyr.query(ch, &audio.channels[ch], app.view.start, app.view.end, width);
         let muted = match app.solo {
             Some(s) => s != ch,
             None => app.mutes.get(ch).copied().unwrap_or(false),
@@ -254,20 +296,46 @@ fn draw_waveform(app: &App, p: &egui::Painter, rect: Rect) {
         } else {
             WAVE_RMS
         };
-        for (i, b) in bins.iter().enumerate() {
-            let x = rect.left() + i as f32 + 0.5;
-            let y0 = mid - b.max.clamp(-1.0, 1.0) * half;
-            let y1 = mid - b.min.clamp(-1.0, 1.0) * half;
-            let clipped = b.max >= CLIP_THRESHOLD || b.min <= -CLIP_THRESHOLD;
-            p.vline(
-                x,
-                Rangef::new(y0.min(y1), y1.max(y0 + 1.0)),
-                Stroke::new(1.0, if clipped { CLIP } else { fill }),
-            );
-            if show_rms && b.rms > 0.0 {
-                let r = b.rms.min(1.0) * half;
-                let c = if clipped { CLIP_RMS } else { rms_c };
-                p.vline(x, Rangef::new(mid - r, mid + r), Stroke::new(1.0, c));
+        // Zoomed in far enough that a pixel spans only a few samples: draw
+        // the actual signal, a polyline through every sample (Sound
+        // Forge/Praat style), instead of the min/max envelope.
+        let spp = app.view.len() / width.max(1) as f64;
+        if spp <= 4.0 {
+            let samples = &audio.channels[ch];
+            let a = app.view.start.floor().max(0.0) as usize;
+            let b = (app.view.end.ceil().max(0.0) as usize).min(samples.len());
+            let pts: Vec<Pos2> = samples[a..b]
+                .iter()
+                .enumerate()
+                .map(|(i, &s)| {
+                    pos2(
+                        frame_to_x(&app.view, rect, (a + i) as f64),
+                        mid - (s * vz).clamp(-1.0, 1.0) * half,
+                    )
+                })
+                .collect();
+            if pts.len() >= 2 {
+                p.add(egui::Shape::line(pts, Stroke::new(1.0, fill)));
+            } else if let Some(&pt) = pts.first() {
+                p.circle_filled(pt, 1.5, fill);
+            }
+        } else {
+            let bins = pyr.query(ch, &audio.channels[ch], app.view.start, app.view.end, width);
+            for (i, b) in bins.iter().enumerate() {
+                let x = rect.left() + i as f32 + 0.5;
+                let y0 = mid - (b.max * vz).clamp(-1.0, 1.0) * half;
+                let y1 = mid - (b.min * vz).clamp(-1.0, 1.0) * half;
+                let clipped = b.max >= CLIP_THRESHOLD || b.min <= -CLIP_THRESHOLD;
+                p.vline(
+                    x,
+                    Rangef::new(y0.min(y1), y1.max(y0 + 1.0)),
+                    Stroke::new(1.0, if clipped { CLIP } else { fill }),
+                );
+                if show_rms && b.rms > 0.0 {
+                    let r = (b.rms * vz).min(1.0) * half;
+                    let c = if clipped { CLIP_RMS } else { rms_c };
+                    p.vline(x, Rangef::new(mid - r, mid + r), Stroke::new(1.0, c));
+                }
             }
         }
         p.text(

@@ -1,13 +1,239 @@
 //! Transport bar, side panel (file, loudness, view settings) and status bar.
 
 use eframe::egui;
-use egui::{Color32, RichText};
+use egui::{Color32, Rect, RichText, Sense, Shape, pos2, vec2};
 
 use auriscope::analysis::{ColorMap, StftParams, WindowKind, db_to_amp};
 
 use super::App;
 use super::util::fmt_time;
 use super::views::channel_label;
+
+const TITLEBAR_BG: Color32 = Color32::from_rgb(30, 30, 36);
+const CLOSE_HOVER: Color32 = Color32::from_rgb(224, 27, 36);
+
+enum WindowIcon {
+    Minimize,
+    Maximize,
+    Restore,
+    Close,
+}
+
+/// A GNOME-style window button: a grey circle on hover (red for close),
+/// with a painted vector icon.
+fn window_button(
+    ui: &egui::Ui,
+    rect: Rect,
+    id: &str,
+    icon: WindowIcon,
+    tooltip: &str,
+) -> egui::Response {
+    let resp = ui.interact(rect, egui::Id::new(id), Sense::click());
+    let p = ui.painter_at(rect);
+    let c = rect.center();
+    let hover = resp.hovered();
+    let fg = if hover {
+        if matches!(icon, WindowIcon::Close) {
+            p.circle_filled(c, 13.0, CLOSE_HOVER);
+        } else {
+            p.circle_filled(c, 13.0, Color32::from_gray(65));
+        }
+        Color32::WHITE
+    } else {
+        Color32::from_gray(185)
+    };
+    match icon {
+        WindowIcon::Minimize => {
+            p.rect_filled(Rect::from_center_size(c, vec2(10.0, 1.5)), 0.5, fg);
+        }
+        WindowIcon::Maximize => {
+            p.rect_stroke(
+                Rect::from_center_size(c, vec2(10.0, 10.0)),
+                2.0,
+                egui::Stroke::new(1.5, fg),
+                egui::StrokeKind::Middle,
+            );
+        }
+        WindowIcon::Restore => {
+            let back = Rect::from_center_size(c + vec2(2.5, 2.5), vec2(9.0, 9.0));
+            let front = Rect::from_center_size(c - vec2(2.5, 2.5), vec2(9.0, 9.0));
+            p.rect(
+                back,
+                2.0,
+                Color32::TRANSPARENT,
+                egui::Stroke::new(1.5, fg),
+                egui::StrokeKind::Middle,
+            );
+            p.rect(
+                front,
+                2.0,
+                TITLEBAR_BG,
+                egui::Stroke::new(1.5, fg),
+                egui::StrokeKind::Middle,
+            );
+        }
+        WindowIcon::Close => {
+            let d = 4.5;
+            p.line_segment([c - vec2(d, d), c + vec2(d, d)], egui::Stroke::new(1.6, fg));
+            p.line_segment(
+                [c - vec2(d, -d), c + vec2(d, -d)],
+                egui::Stroke::new(1.6, fg),
+            );
+        }
+    }
+    resp.on_hover_text(tooltip)
+}
+
+/// Client-side title bar: window buttons, drag-to-move and
+/// double-click-to-maximize, plus a north resize grip.
+pub fn title_bar(app: &mut App, root: &mut egui::Ui) {
+    egui::Panel::top("titlebar")
+        .exact_size(34.0)
+        .frame(egui::Frame::NONE.fill(TITLEBAR_BG))
+        .show(root, |ui| {
+            let ctx = ui.ctx().clone();
+            let full = ui.available_rect_before_wrap();
+            let bw = 34.0;
+            let r_close =
+                Rect::from_min_max(pos2(full.right() - bw, full.top()), full.right_bottom());
+            let r_max = r_close.translate(vec2(-bw, 0.0));
+            let r_min = r_max.translate(vec2(-bw, 0.0));
+
+            let maximized = ui.input(|i| i.viewport().maximized.unwrap_or(false));
+            let close = window_button(ui, r_close, "win-close", WindowIcon::Close, "Close");
+            if close.clicked() {
+                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            }
+            let (max_icon, max_tip) = if maximized {
+                (WindowIcon::Restore, "Restore")
+            } else {
+                (WindowIcon::Maximize, "Maximize")
+            };
+            let max = window_button(ui, r_max, "win-max", max_icon, max_tip);
+            if max.clicked() {
+                ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(!maximized));
+            }
+            let min = window_button(ui, r_min, "win-min", WindowIcon::Minimize, "Minimize");
+            if min.clicked() {
+                ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true));
+            }
+
+            // The rest of the bar moves the window; double-click maximizes.
+            let drag_rect = Rect::from_min_max(full.min, pos2(r_min.left(), full.bottom()));
+            let drag = ui.interact(
+                drag_rect,
+                egui::Id::new("titlebar-drag"),
+                Sense::click_and_drag(),
+            );
+            if drag.drag_started() {
+                ctx.send_viewport_cmd(egui::ViewportCommand::StartDrag);
+            }
+            if drag.double_clicked() {
+                ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(!maximized));
+            }
+            ui.painter().text(
+                pos2(full.left() + 8.0, full.center().y),
+                egui::Align2::LEFT_CENTER,
+                &app.title,
+                egui::FontId::proportional(12.5),
+                Color32::from_gray(175),
+            );
+        });
+}
+
+/// Client-side window resize borders, drawn as a foreground overlay.
+///
+/// These deliberately do **not** live inside any panel. `allocate_*` inside a
+/// panel takes space out of that panel's own layout, which is what collapses
+/// it; `Ui::interact` on an overlay allocates nothing and disturbs nothing.
+pub fn resize_borders(ctx: &egui::Context) {
+    use egui::CursorIcon as Cur;
+    use egui::viewport::ResizeDirection as Dir;
+
+    // A maximized window is not resizable by its edges.
+    if ctx.input(|i| i.viewport().maximized.unwrap_or(false)) {
+        return;
+    }
+
+    const EDGE: f32 = 6.0;
+    const CORNER: f32 = 16.0;
+    let r = ctx.viewport_rect();
+    if r.width() < 4.0 * CORNER || r.height() < 4.0 * CORNER {
+        return;
+    }
+    let (l, rt, t, b) = (r.left(), r.right(), r.top(), r.bottom());
+
+    // Edges first, corners last: within a layer, the widget added later wins
+    // the pointer, and a corner must beat the two edges it overlaps.
+    let regions: [(&str, Rect, Dir, Cur); 8] = [
+        (
+            "rz-n",
+            Rect::from_min_max(pos2(l, t), pos2(rt, t + EDGE)),
+            Dir::North,
+            Cur::ResizeNorth,
+        ),
+        (
+            "rz-s",
+            Rect::from_min_max(pos2(l, b - EDGE), pos2(rt, b)),
+            Dir::South,
+            Cur::ResizeSouth,
+        ),
+        (
+            "rz-w",
+            Rect::from_min_max(pos2(l, t), pos2(l + EDGE, b)),
+            Dir::West,
+            Cur::ResizeWest,
+        ),
+        (
+            "rz-e",
+            Rect::from_min_max(pos2(rt - EDGE, t), pos2(rt, b)),
+            Dir::East,
+            Cur::ResizeEast,
+        ),
+        (
+            "rz-nw",
+            Rect::from_min_max(pos2(l, t), pos2(l + CORNER, t + CORNER)),
+            Dir::NorthWest,
+            Cur::ResizeNorthWest,
+        ),
+        (
+            "rz-ne",
+            Rect::from_min_max(pos2(rt - CORNER, t), pos2(rt, t + CORNER)),
+            Dir::NorthEast,
+            Cur::ResizeNorthEast,
+        ),
+        (
+            "rz-sw",
+            Rect::from_min_max(pos2(l, b - CORNER), pos2(l + CORNER, b)),
+            Dir::SouthWest,
+            Cur::ResizeSouthWest,
+        ),
+        (
+            "rz-se",
+            Rect::from_min_max(pos2(rt - CORNER, b - CORNER), pos2(rt, b)),
+            Dir::SouthEast,
+            Cur::ResizeSouthEast,
+        ),
+    ];
+
+    egui::Area::new(egui::Id::new("resize-borders"))
+        .order(egui::Order::Foreground)
+        .fixed_pos(r.min)
+        .interactable(true)
+        .show(ctx, |ui| {
+            ui.set_clip_rect(r);
+            for (id, rect, dir, cursor) in regions {
+                let resp = ui.interact(rect, egui::Id::new(id), Sense::drag());
+                if resp.hovered() || resp.dragged() {
+                    ui.ctx().set_cursor_icon(cursor);
+                }
+                if resp.drag_started() {
+                    ui.ctx()
+                        .send_viewport_cmd(egui::ViewportCommand::BeginResize(dir));
+                }
+            }
+        });
+}
 
 pub fn top_bar(app: &mut App, root: &mut egui::Ui) {
     egui::Panel::top("top").show(root, |ui| {
@@ -19,29 +245,23 @@ pub fn top_bar(app: &mut App, root: &mut egui::Ui) {
 
             let has = app.engine.is_some();
             let playing = app.engine.as_ref().is_some_and(|e| e.is_playing());
-            let label = if playing { "⏸" } else { "▶" };
-            if ui
-                .add_enabled(has, egui::Button::new(RichText::new(label).size(18.0)))
-                .on_hover_text("Space")
-                .clicked()
-            {
+            if transport_button(ui, has, Transport::ToStart, "Home").clicked() && has {
+                app.seek_frames(0.0);
+            }
+            let icon = if playing {
+                Transport::Pause
+            } else {
+                Transport::Play
+            };
+            if transport_button(ui, has, icon, "Space").clicked() && has {
                 app.toggle_play();
             }
-            if ui
-                .add_enabled(has, egui::Button::new(RichText::new("⏹").size(18.0)))
-                .clicked()
+            if transport_button(ui, has, Transport::Stop, "Stop").clicked()
                 && let Some(e) = &app.engine
             {
                 e.pause();
                 let start = app.loop_region().map_or(0, |(a, _)| a);
                 e.seek(start);
-            }
-            if ui
-                .add_enabled(has, egui::Button::new("⏮"))
-                .on_hover_text("Home")
-                .clicked()
-            {
-                app.seek_frames(0.0);
             }
 
             let sr = app.sample_rate();
@@ -106,6 +326,91 @@ pub fn top_bar(app: &mut App, root: &mut egui::Ui) {
     });
 }
 
+enum Transport {
+    Play,
+    Pause,
+    Stop,
+    ToStart,
+}
+
+/// A transport button drawn as a vector icon: crisp, uniform, and not at the
+/// mercy of whichever fallback font owns the ⏸/⏹/⏮ glyphs.
+fn transport_button(
+    ui: &mut egui::Ui,
+    enabled: bool,
+    icon: Transport,
+    tooltip: &str,
+) -> egui::Response {
+    let (resp, painter) = ui.allocate_painter(vec2(30.0, 26.0), Sense::click());
+    let visuals = ui.style().visuals.clone();
+    let (bg, fg) = if !enabled {
+        (Color32::TRANSPARENT, Color32::from_gray(100))
+    } else if resp.hovered() && resp.is_pointer_button_down_on() {
+        (
+            visuals.widgets.active.weak_bg_fill,
+            visuals.widgets.active.fg_stroke.color,
+        )
+    } else if resp.hovered() {
+        (
+            visuals.widgets.hovered.weak_bg_fill,
+            visuals.widgets.hovered.fg_stroke.color,
+        )
+    } else {
+        (Color32::TRANSPARENT, Color32::from_gray(215))
+    };
+    if bg != Color32::TRANSPARENT {
+        painter.rect_filled(resp.rect, 4.0, bg);
+    }
+    let c = resp.rect.center();
+    match icon {
+        Transport::Play => {
+            painter.add(Shape::convex_polygon(
+                vec![
+                    pos2(c.x - 5.0, c.y - 8.0),
+                    pos2(c.x - 5.0, c.y + 8.0),
+                    pos2(c.x + 7.0, c.y),
+                ],
+                fg,
+                egui::Stroke::NONE,
+            ));
+        }
+        Transport::Pause => {
+            let (w, h) = (2.5, 8.0);
+            painter.rect_filled(
+                Rect::from_min_max(pos2(c.x - 3.0 - w, c.y - h), pos2(c.x - 3.0 + w, c.y + h)),
+                1.0,
+                fg,
+            );
+            painter.rect_filled(
+                Rect::from_min_max(pos2(c.x + 3.0 - w, c.y - h), pos2(c.x + 3.0 + w, c.y + h)),
+                1.0,
+                fg,
+            );
+        }
+        Transport::Stop => {
+            painter.rect_filled(Rect::from_center_size(c, vec2(13.0, 13.0)), 2.0, fg);
+        }
+        Transport::ToStart => {
+            let h = 8.0;
+            painter.rect_filled(
+                Rect::from_min_max(pos2(c.x - 7.5, c.y - h), pos2(c.x - 5.0, c.y + h)),
+                1.0,
+                fg,
+            );
+            painter.add(Shape::convex_polygon(
+                vec![
+                    pos2(c.x + 7.5, c.y - h),
+                    pos2(c.x + 7.5, c.y + h),
+                    pos2(c.x - 3.5, c.y),
+                ],
+                fg,
+                egui::Stroke::NONE,
+            ));
+        }
+    }
+    resp.on_hover_text(tooltip)
+}
+
 pub fn status_bar(app: &mut App, root: &mut egui::Ui) {
     egui::Panel::bottom("status").show(root, |ui| {
         ui.horizontal(|ui| {
@@ -146,10 +451,14 @@ pub fn status_bar(app: &mut App, root: &mut egui::Ui) {
 }
 
 pub fn side_panel(app: &mut App, root: &mut egui::Ui) {
+    // Bound the width against the window. Panel widths are persisted, so an
+    // unbounded one that goes wrong once stays wrong across restarts.
+    let max_w = (root.ctx().viewport_rect().width() * 0.45).max(220.0);
     egui::Panel::right("side")
         .resizable(true)
         .default_size(270.0)
         .min_size(200.0)
+        .max_size(max_w)
         .show(root, |ui| {
             egui::ScrollArea::vertical().show(ui, |ui| {
                 file_section(app, ui);
@@ -406,7 +715,9 @@ fn view_section(app: &mut App, ui: &mut egui::Ui) {
                 "Space play/pause · click seek · drag select\n\
              ←/→ ±5 s (Shift: 1 s) · Home/End\n\
              L loop selection · Esc clear · F zoom selection (Shift+F: fit)\n\
-             wheel pan · Ctrl+wheel / pinch zoom · +/- zoom",
+             wheel zoom at pointer · shift+wheel pan\n\
+             Alt+Shift+wheel waveform vertical zoom\n\
+             Ctrl+wheel / pinch zoom · +/- zoom",
             )
             .small(),
         );

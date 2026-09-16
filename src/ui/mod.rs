@@ -35,6 +35,8 @@ pub struct Settings {
     pub spectrum_size: usize,
     pub spectrum_averaging: f32,
     pub waveform_fraction: f32,
+    /// Vertical (amplitude) zoom of the waveform strip; 1.0 fits ±1.
+    pub wave_v_zoom: f32,
     pub follow_playhead: bool,
     pub show_rms: bool,
     pub last_file: Option<PathBuf>,
@@ -54,6 +56,7 @@ impl Default for Settings {
             spectrum_size: 4096,
             spectrum_averaging: 0.6,
             waveform_fraction: 0.3,
+            wave_v_zoom: 1.0,
             follow_playhead: true,
             show_rms: true,
             last_file: None,
@@ -136,6 +139,8 @@ pub struct App {
     solo: Option<usize>,
     error: Option<String>,
     hover_info: String,
+    /// Window title shown by our custom title bar.
+    title: String,
     last_tick: Instant,
     pending_open: Option<PathBuf>,
     /// Dev hook: `AURISCOPE_SCREENSHOT=out.ppm` writes one frame after the
@@ -149,7 +154,10 @@ impl App {
             .storage
             .and_then(|s| eframe::get_value(s, eframe::APP_KEY))
             .unwrap_or_default();
-        cc.egui_ctx.set_visuals(egui::Visuals::dark());
+        // set_visuals alone loses to egui's system-theme sync, which repaints
+        // the app in the desktop's light theme. Setting the *preference* is
+        // what actually sticks.
+        cc.egui_ctx.set_theme(egui::ThemePreference::Dark);
         let pending_open = initial.or_else(|| settings.last_file.clone());
         Self {
             settings,
@@ -173,6 +181,7 @@ impl App {
             solo: None,
             error: None,
             hover_info: String::new(),
+            title: "Auriscope".into(),
             last_tick: Instant::now(),
             pending_open,
             screenshot: std::env::var_os("AURISCOPE_SCREENSHOT").map(|p| (PathBuf::from(p), None)),
@@ -265,10 +274,8 @@ impl App {
                 Msg::Progress(p) => job.progress = p,
                 Msg::Decoded(audio) => {
                     self.settings.last_file = Some(audio.info.path.clone());
-                    ctx.send_viewport_cmd(egui::ViewportCommand::Title(format!(
-                        "{} — Auriscope",
-                        audio.info.file_name()
-                    )));
+                    self.title = format!("{} — Auriscope", audio.info.file_name());
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Title(self.title.clone()));
                     self.view = View {
                         start: 0.0,
                         end: audio.frames() as f64,
@@ -592,11 +599,13 @@ impl eframe::App for App {
         self.tick_live();
         self.follow_playhead();
 
+        panels::title_bar(self, ui);
         panels::top_bar(self, ui);
         panels::status_bar(self, ui);
         panels::side_panel(self, ui);
         spectrum::bottom_panel(self, ui);
         views::central(self, ui);
+        panels::resize_borders(ctx);
 
         self.screenshot_hook(ctx);
 

@@ -16,6 +16,9 @@ fn main() -> eframe::Result {
             .with_app_id("io.github.frdcmp.Auriscope")
             .with_inner_size([1280.0, 800.0])
             .with_min_inner_size([640.0, 400.0])
+            // We draw our own title bar (GNOME-style window buttons), so no
+            // server-side decorations.
+            .with_decorations(false)
             .with_drag_and_drop(true),
         ..Default::default()
     };
