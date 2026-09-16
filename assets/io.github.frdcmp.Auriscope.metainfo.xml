@@ -77,6 +77,13 @@
   <content_rating type="oars-1.1" />
 
   <releases>
+    <release version="0.1.1" date="2026-09-17">
+      <description>
+        <p>An application icon in the title bar, the taskbar and the window manager.</p>
+        <p>Auriscope now tells you when a newer release is available, checked once a day against GitHub and turned off in Settings. Distribution packages leave the check out; your package manager handles updates.</p>
+        <p>New command line options: --version and --help.</p>
+      </description>
+    </release>
     <release version="0.1.0" date="2026-09-16">
       <description>
         <p>First release.</p>
