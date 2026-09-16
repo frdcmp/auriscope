@@ -77,6 +77,14 @@
   <content_rating type="oars-1.1" />
 
   <releases>
+    <release version="0.1.2" date="2026-09-17">
+      <description>
+        <p>A recently opened list, so returning to a file you were working on no longer means finding it again.</p>
+        <p>A help mode that explains what each part of the window is showing, for the parts of an analyser that are not self-evident.</p>
+        <p>An output meter with peak detection, and per-channel isolation alongside the existing mute and solo.</p>
+        <p>A clearer settings dialog, with key hints on the controls that have keyboard shortcuts.</p>
+      </description>
+    </release>
     <release version="0.1.1" date="2026-09-17">
       <description>
         <p>An application icon in the title bar, the taskbar and the window manager.</p>
