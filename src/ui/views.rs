@@ -13,7 +13,7 @@ use auriscope::analysis::stats::CLIP_THRESHOLD;
 use auriscope::analysis::{ViewParams, render_view};
 
 use super::fonts;
-use super::util::{fmt_hz, fmt_time, fmt_time_step, nice_time_step};
+use super::util::{fmt_hz, fmt_time_field, fmt_time_step, nice_time_step};
 use super::{App, View};
 
 /// A spectrogram image being rendered on a worker thread.
@@ -202,7 +202,8 @@ pub fn central(app: &mut App, root: &mut egui::Ui) {
                 .or(ruler_resp.hover_pos())
             {
                 let f = x_to_frame(&app.view, full, pos.x);
-                app.hover_info = fmt_time(f / app.sample_rate());
+                let secs = f / app.sample_rate();
+                app.hover_info = fmt_time_field(secs, app.duration_secs());
             }
         });
 }
@@ -1029,7 +1030,7 @@ fn spectrogram_hover(app: &mut App, pos: Pos2, rect: Rect) {
     let frame = x_to_frame(&app.view, rect, pos.x);
     let secs = frame / app.sample_rate();
     let Some(spec) = app.spectrograms.get(ch).cloned().flatten() else {
-        app.hover_info = fmt_time(secs);
+        app.hover_info = fmt_time_field(secs, app.duration_secs());
         return;
     };
     let hz = y_to_hz(app, crect, pos.y, spec.nyquist());
@@ -1039,20 +1040,23 @@ fn spectrogram_hover(app: &mut App, pos: Pos2, rect: Rect) {
         col.min(spec.columns().saturating_sub(1)),
         bin.min(spec.bins - 1),
     );
+    // Every field is right-aligned in a field wide enough for its widest
+    // value: the readout is right-aligned in the status bar, so a field that
+    // grows by a digit would otherwise drag everything left of it along.
+    let hz_w = fmt_hz_full(spec.nyquist()).len();
     app.hover_info = format!(
-        "{}   {} Hz   {:.1} dB   ({})",
-        fmt_time(secs),
+        "{}   {:>hz_w$}   {db:>6.1} dB   ({})",
+        fmt_time_field(secs, app.duration_secs()),
         fmt_hz_full(hz),
-        db,
         channel_label(ch, nch)
     );
 }
 
 fn fmt_hz_full(hz: f32) -> String {
     if hz >= 1000.0 {
-        format!("{:.2} k", hz / 1000.0)
+        format!("{:.2} kHz", hz / 1000.0)
     } else {
-        format!("{hz:.1}")
+        format!("{hz:.1} Hz")
     }
 }
 

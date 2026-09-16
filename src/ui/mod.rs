@@ -2,6 +2,7 @@
 //! atomics from the engine, cached analysis results, and the live tap.
 
 pub mod fonts;
+pub mod help;
 pub mod icon;
 mod panels;
 mod spectrum;
@@ -212,6 +213,9 @@ pub struct App {
     hover_info: String,
     /// Whether the settings dialog is open.
     settings_open: bool,
+    /// Whether help mode is on: hovering a label explains it. Session-only —
+    /// it is a way of reading the UI, not a preference worth remembering.
+    help_mode: bool,
     /// Content height of the settings dialog last frame, so its scroll area
     /// can claim that much: inside a modal the reported available height is
     /// not the screen's.
@@ -291,6 +295,7 @@ impl App {
             error: None,
             hover_info: String::new(),
             settings_open: false,
+            help_mode: false,
             settings_content_h: 0.0,
             settings_scroll_end: false,
             last_view: View {
@@ -316,6 +321,10 @@ impl App {
         self.audio
             .as_ref()
             .map_or(48_000.0, |a| a.sample_rate() as f64)
+    }
+
+    fn duration_secs(&self) -> f64 {
+        self.audio.as_ref().map_or(0.0, |a| a.info.duration_secs())
     }
 
     // ---- loading -------------------------------------------------------
@@ -654,7 +663,7 @@ impl App {
     // ---- input -----------------------------------------------------------
 
     fn handle_shortcuts(&mut self, ctx: &egui::Context) {
-        let (space, home, end, left, right, l, f, esc, plus, minus, open, comma, shift) = ctx
+        let (space, home, end, left, right, l, f, esc, plus, minus, open, comma, f1, shift) = ctx
             .input(|i| {
                 (
                     i.key_pressed(egui::Key::Space),
@@ -669,6 +678,7 @@ impl App {
                     i.key_pressed(egui::Key::Minus),
                     i.modifiers.command && i.key_pressed(egui::Key::O),
                     i.modifiers.command && i.key_pressed(egui::Key::Comma),
+                    i.key_pressed(egui::Key::F1),
                     i.modifiers.shift,
                 )
             });
@@ -677,6 +687,15 @@ impl App {
         }
         if comma {
             self.settings_open = !self.settings_open;
+        }
+        // Before the early return below: help mode is as useful over the
+        // settings dialog as over the panels, so F1 has to reach it there.
+        if f1 {
+            self.help_mode = !self.help_mode;
+        }
+        if esc && self.help_mode {
+            self.help_mode = false;
+            return;
         }
         // While the dialog is up it owns the keyboard, so the transport and
         // view shortcuts below stay out of its way.
@@ -910,6 +929,7 @@ impl eframe::App for App {
         }
         self.handle_drops(ctx);
         self.handle_shortcuts(ctx);
+        help::set_enabled(ctx, self.help_mode);
         self.tick_live();
         self.follow_playhead();
         if self.view != self.last_view {

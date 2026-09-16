@@ -54,3 +54,11 @@ pub fn fmt_hz(hz: f32) -> String {
         format!("{hz:.0}")
     }
 }
+
+/// `fmt_time` right-aligned in a field as wide as the longest time the clip
+/// can show, so a readout that updates every frame keeps its neighbours put
+/// instead of shuffling them when the minute rolls over to two digits.
+pub fn fmt_time_field(secs: f64, total_secs: f64) -> String {
+    let w = fmt_time(total_secs.max(secs)).len();
+    format!("{:>w$}", fmt_time(secs))
+}

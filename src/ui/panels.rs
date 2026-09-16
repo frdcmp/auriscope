@@ -10,9 +10,10 @@ use auriscope::analysis::{ColorMap, StftParams, WindowKind, db_to_amp};
 
 use super::App;
 use super::fonts;
+use super::help::{self, Topic};
 use super::icon;
 use super::update;
-use super::util::fmt_time;
+use super::util::{fmt_time, fmt_time_field};
 use super::views::{V_ZOOM_MAX, V_ZOOM_MIN, channel_label};
 
 const TITLEBAR_BG: Color32 = Color32::from_rgb(30, 30, 36);
@@ -295,9 +296,13 @@ pub fn top_bar(app: &mut App, root: &mut egui::Ui) {
                 .map_or(0.0, |e| e.playhead() as f64 / sr);
             let total = app.audio.as_ref().map_or(0.0, |a| a.info.duration_secs());
             ui.label(
-                RichText::new(format!("{} / {}", fmt_time(pos), fmt_time(total)))
-                    .monospace()
-                    .size(15.0),
+                RichText::new(format!(
+                    "{} / {}",
+                    fmt_time_field(pos, total),
+                    fmt_time(total)
+                ))
+                .monospace()
+                .size(15.0),
             );
 
             ui.separator();
@@ -318,9 +323,9 @@ pub fn top_bar(app: &mut App, root: &mut egui::Ui) {
                 ui.label(
                     RichText::new(format!(
                         "{} – {}  ({})",
-                        fmt_time(a),
-                        fmt_time(b),
-                        fmt_time(b - a)
+                        fmt_time_field(a, total),
+                        fmt_time_field(b, total),
+                        fmt_time_field(b - a, total)
                     ))
                     .monospace()
                     .color(Color32::from_gray(170)),
@@ -328,9 +333,16 @@ pub fn top_bar(app: &mut App, root: &mut egui::Ui) {
             }
 
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                // The value boxes sit in a right-to-left layout, so anything
+                // that changes their width shoves the rest of the bar sideways
+                // as you drag. Monospace digits plus a padded, fixed-length
+                // format keep each box the same size at every value.
+                ui.style_mut().drag_value_text_style = egui::TextStyle::Monospace;
                 let gain = egui::Slider::new(&mut app.settings.gain_db, -60.0..=12.0)
                     .suffix(" dB")
-                    .text("Gain");
+                    .text("Gain")
+                    .custom_formatter(|n, _| format!("{n:>5.1}"))
+                    .custom_parser(|s| s.trim().parse().ok());
                 if ui.add(gain).changed()
                     && let Some(e) = &app.engine
                 {
@@ -338,7 +350,8 @@ pub fn top_bar(app: &mut App, root: &mut egui::Ui) {
                 }
                 let pan = egui::Slider::new(&mut app.settings.pan, -1.0..=1.0)
                     .text("Pan")
-                    .fixed_decimals(2);
+                    .custom_formatter(|n, _| format!("{n:>5.2}"))
+                    .custom_parser(|s| s.trim().parse().ok());
                 if ui.add(pan).changed()
                     && let Some(e) = &app.engine
                 {
@@ -349,6 +362,16 @@ pub fn top_bar(app: &mut App, root: &mut egui::Ui) {
                     .clicked()
                 {
                     app.settings_open = !app.settings_open;
+                }
+                if help::toggle_button(ui, app.help_mode, vec2(28.0, ROW_H))
+                    .on_hover_text(if app.help_mode {
+                        "Help mode on: hover anything labelled to read what it means (F1)"
+                    } else {
+                        "Help mode (F1)"
+                    })
+                    .clicked()
+                {
+                    app.help_mode = !app.help_mode;
                 }
                 ui.separator();
                 ui.checkbox(&mut app.settings.follow_playhead, "Follow");
@@ -593,28 +616,42 @@ pub fn side_panel(app: &mut App, root: &mut egui::Ui) {
 // ---- Sidebar styling -------------------------------------------------------
 
 const SIDE_BG: Color32 = Color32::from_rgb(22, 23, 26);
-const CARD_BG: Color32 = Color32::from_rgb(31, 32, 36);
-const ACCENT: Color32 = Color32::from_rgb(86, 156, 214);
-const KEY: Color32 = Color32::from_gray(140);
-const VAL: Color32 = Color32::from_gray(228);
+pub(super) const CARD_BG: Color32 = Color32::from_rgb(31, 32, 36);
+pub(super) const ACCENT: Color32 = Color32::from_rgb(86, 156, 214);
+pub(super) const KEY: Color32 = Color32::from_gray(140);
+/// Section headings inside a card: quieter than a value, weightier than a key.
+const SUBHEAD: Color32 = Color32::from_gray(128);
+/// The rule a section heading trails, a shade above the card it sits on.
+const SUBHEAD_RULE: Color32 = Color32::from_gray(58);
+pub(super) const VAL: Color32 = Color32::from_gray(228);
 const GOOD: Color32 = Color32::from_rgb(120, 200, 130);
 const WARN: Color32 = Color32::from_rgb(247, 198, 72);
 const BAD: Color32 = Color32::from_rgb(255, 110, 110);
 
 /// Card padding: tight in the side panel, which is a narrow column, and roomier
 /// in the settings dialog, which has the width to breathe.
+/// The header band sits a shade above the card, and closes on a rule a shade
+/// above that: enough to read as a header strip on a dark card, not enough to
+/// look like a separate widget.
+const CARD_HEAD_BG: Color32 = Color32::from_rgb(38, 40, 45);
+const CARD_HEAD_RULE: Color32 = Color32::from_rgb(52, 54, 60);
+
 const CARD_PAD: Margin = Margin::symmetric(10, 8);
 const CARD_PAD_WIDE: Margin = Margin::symmetric(14, 12);
 
 /// A titled card: icon, title, optional right-aligned note, then the body.
+///
+/// The title carries the card's own help topic — the place for the idea behind
+/// the card, which belongs to none of its rows in particular.
 fn card(
     ui: &mut egui::Ui,
     icon: &str,
     title: &str,
+    topic: Topic,
     trailing: Option<String>,
     body: impl FnOnce(&mut egui::Ui),
 ) {
-    card_with(ui, false, icon, title, trailing, body);
+    card_with(ui, false, icon, title, topic, trailing, body);
 }
 
 /// The same card with the settings dialog's roomier padding.
@@ -622,10 +659,11 @@ fn wide_card(
     ui: &mut egui::Ui,
     icon: &str,
     title: &str,
+    topic: Topic,
     trailing: Option<String>,
     body: impl FnOnce(&mut egui::Ui),
 ) {
-    card_with(ui, true, icon, title, trailing, body);
+    card_with(ui, true, icon, title, topic, trailing, body);
 }
 
 fn card_with(
@@ -633,6 +671,7 @@ fn card_with(
     roomy: bool,
     icon: &str,
     title: &str,
+    topic: Topic,
     trailing: Option<String>,
     body: impl FnOnce(&mut egui::Ui),
 ) {
@@ -643,41 +682,271 @@ fn card_with(
         .show(ui, |ui| {
             ui.set_width(ui.available_width());
             ui.spacing_mut().item_spacing.y = if roomy { 6.0 } else { 4.0 };
+            // The band is painted once the header has been laid out, so it can
+            // take that row's height; reserving its slot first keeps it behind
+            // the text rather than over it.
+            let band = ui.painter().add(Shape::Noop);
             ui.horizontal(|ui| {
                 ui.label(RichText::new(icon).color(ACCENT).size(fonts::BODY));
-                ui.label(
+                let t = ui.label(
                     RichText::new(title)
                         .family(fonts::bold())
-                        .size(fonts::BODY)
-                        .color(Color32::from_gray(235)),
+                        .size(fonts::HEADING)
+                        .color(Color32::from_gray(242)),
                 );
+                help::offer_response(ui, &t, topic);
                 if let Some(t) = trailing {
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                         ui.label(RichText::new(t).small().color(KEY));
                     });
                 }
             });
-            ui.add_space(if roomy { 5.0 } else { 2.0 });
+            let pad = if roomy { CARD_PAD_WIDE } else { CARD_PAD };
+            let head = ui.min_rect();
+            // Full width, ignoring the card's padding: a header that stops
+            // short of the edges reads as a first row, not as a header.
+            let strip = Rect::from_min_max(
+                pos2(head.left() - pad.left as f32, head.top() - pad.top as f32),
+                pos2(
+                    head.right() + pad.right as f32,
+                    head.bottom() + pad.top as f32,
+                ),
+            );
+            ui.painter().set(
+                band,
+                Shape::rect_filled(
+                    strip,
+                    egui::CornerRadius {
+                        nw: 6,
+                        ne: 6,
+                        sw: 0,
+                        se: 0,
+                    },
+                    CARD_HEAD_BG,
+                ),
+            );
+            ui.painter().hline(
+                strip.x_range(),
+                strip.bottom() - 0.5,
+                Stroke::new(1.0, CARD_HEAD_RULE),
+            );
+            ui.add_space(if roomy { 12.0 } else { 9.0 });
             body(ui);
         });
 }
 
-/// Key/value grid. Keys weak, values monospace, so numbers line up.
-fn kv_grid(ui: &mut egui::Ui, id: &str, rows: impl FnOnce(&mut egui::Ui)) {
-    egui::Grid::new(id)
-        .num_columns(2)
-        .spacing([12.0, 3.0])
-        .show(ui, rows);
+/// Background of the hovered key/value pair: enough to read as a band across
+/// the gap, not enough to compete with the values.
+const KV_HOVER_BG: Color32 = Color32::from_rgb(46, 48, 54);
+/// Space a key keeps clear of its value's column, the gutter a value keeps
+/// clear of the next pair, and how far the highlight reaches past the text.
+const KV_GAP: f32 = 10.0;
+const KV_COL_GAP: f32 = 18.0;
+const KV_PAD: f32 = 4.0;
+/// Two pairs to a line is four columns; past that a column is too narrow to
+/// hold a value.
+const KV_MAX_PAIRS: usize = 2;
+
+/// One key/value pair, collected before anything is drawn.
+struct KvRow {
+    key: String,
+    value: String,
+    color: Color32,
+    tooltip: Option<String>,
+    help: Option<Topic>,
 }
 
-fn kv(ui: &mut egui::Ui, key: &str, value: impl Into<String>) {
-    kv_colored(ui, key, value, VAL);
+impl KvRow {
+    /// Tooltip for this pair, for values shown abbreviated. This is data the
+    /// row could not fit, so it shows whatever mode the UI is in — unlike
+    /// `help`, which is explanation and only appears in help mode.
+    fn on_hover_text(&mut self, text: impl Into<String>) -> &mut Self {
+        self.tooltip = Some(text.into());
+        self
+    }
+
+    /// What this row means, for help mode.
+    fn help(&mut self, topic: Topic) -> &mut Self {
+        self.help = Some(topic);
+        self
+    }
 }
 
-fn kv_colored(ui: &mut egui::Ui, key: &str, value: impl Into<String>, color: Color32) {
-    ui.label(RichText::new(key).small().color(KEY));
-    ui.add(egui::Label::new(RichText::new(value.into()).monospace().color(color)).truncate());
-    ui.end_row();
+/// A block of key/value pairs.
+///
+/// Rows are gathered first so the block can measure them, then laid out in
+/// columns that split the card in equal fractions: keys in one, values in the
+/// next. One pair to a line is two columns, so the values start at half the
+/// card; two pairs is four, at each quarter. The columns are invisible — only
+/// the hovered pair is painted, as a band tying a key to its value across the
+/// gap.
+#[derive(Default)]
+struct Kv {
+    rows: Vec<KvRow>,
+}
+
+impl Kv {
+    fn push(
+        &mut self,
+        key: impl Into<String>,
+        value: impl Into<String>,
+        color: Color32,
+    ) -> &mut KvRow {
+        self.rows.push(KvRow {
+            key: key.into(),
+            value: value.into(),
+            color,
+            tooltip: None,
+            help: None,
+        });
+        self.rows.last_mut().expect("just pushed")
+    }
+
+    fn show(self, ui: &mut egui::Ui) {
+        if self.rows.is_empty() {
+            return;
+        }
+        let key_font = FontId::new(fonts::SMALL, egui::FontFamily::Proportional);
+        let val_font = FontId::monospace(fonts::MONO_SIZE);
+        let text_w = |ui: &egui::Ui, text: &str, font: &FontId| {
+            ui.painter()
+                .layout_no_wrap(text.to_owned(), font.clone(), Color32::PLACEHOLDER)
+                .size()
+                .x
+        };
+        let widest = |pick: fn(&KvRow) -> &String, font: &FontId| {
+            self.rows
+                .iter()
+                .map(|r| text_w(ui, pick(r), font))
+                .fold(0.0, f32::max)
+        };
+        let key_w = widest(|r| &r.key, &key_font);
+        let val_w = widest(|r| &r.value, &val_font);
+
+        let avail = ui.available_width();
+        let pairs = kv_pairs_per_line(self.rows.len(), kv_col_need(key_w, val_w), avail);
+        // Every column is the same fraction of the card, keys and values alike,
+        // so column n starts at n/(2·pairs) however short the keys run.
+        let col_w = avail / (2 * pairs) as f32;
+        let lines = self.rows.len().div_ceil(pairs);
+
+        let row_h = ui
+            .text_style_height(&egui::TextStyle::Small)
+            .max(ui.text_style_height(&egui::TextStyle::Monospace))
+            + 3.0;
+        let (rect, _) = ui.allocate_exact_size(vec2(avail, lines as f32 * row_h), Sense::hover());
+
+        for (i, row) in self.rows.iter().enumerate() {
+            let (line, pair) = (i / pairs, i % pairs);
+            let key_x = rect.left() + (2 * pair) as f32 * col_w;
+            let top = rect.top() + line as f32 * row_h;
+            // The band starts a little left of the key and stops a little short
+            // of the next pair, so the text never sits flush against an edge.
+            let cell = Rect::from_min_size(pos2(key_x - KV_PAD, top), vec2(col_w * 2.0, row_h));
+            if ui.rect_contains_pointer(cell) {
+                ui.painter().rect_filled(cell, 3.0, KV_HOVER_BG);
+            }
+            let key = clipped(ui, &row.key, &key_font, KEY, col_w - KV_GAP);
+            let value = clipped(ui, &row.value, &val_font, row.color, col_w - KV_COL_GAP);
+            let y = |g: &egui::Galley| cell.center().y - g.size().y / 2.0;
+            let key_at = pos2(key_x, y(&key));
+            let val_at = pos2(key_x + col_w, y(&value));
+            let key_rect = Rect::from_min_size(key_at, key.size());
+            ui.painter().galley(key_at, key, KEY);
+            ui.painter().galley(val_at, value, row.color);
+            // Help wins the hover: an explanation and a truncated value in the
+            // same popup would be two different kinds of thing at once.
+            let helped = row
+                .help
+                .is_some_and(|topic| help::offer(ui, key_rect, cell, topic));
+            if let Some(tip) = &row.tooltip
+                && !helped
+            {
+                ui.interact(cell, ui.id().with(("kv", i)), Sense::hover())
+                    .on_hover_text(tip);
+            }
+        }
+    }
+}
+
+/// The width every column has to have, given the widest key and widest value.
+/// Columns are uniform, so one number covers both: whichever of the two needs
+/// more room, with the spacing that has to follow it.
+fn kv_col_need(key_w: f32, val_w: f32) -> f32 {
+    (key_w + KV_GAP).max(val_w + KV_COL_GAP)
+}
+
+/// How many key/value pairs fit on one line.
+///
+/// A second pair is only taken if all four columns still clear `col_need`, so
+/// packing never costs a value its characters. Each pair also needs two rows of
+/// its own — otherwise a short block spreads into a wide, one-line strip
+/// instead of reading as a list.
+fn kv_pairs_per_line(rows: usize, col_need: f32, avail: f32) -> usize {
+    let by_width = (avail / (2.0 * col_need)).floor().max(1.0) as usize;
+    by_width.min((rows / 2).max(1)).min(KV_MAX_PAIRS)
+}
+
+/// Lay `text` out on one line, cut with an ellipsis if it runs past `max_w`.
+fn clipped(
+    ui: &egui::Ui,
+    text: &str,
+    font: &FontId,
+    color: Color32,
+    max_w: f32,
+) -> std::sync::Arc<egui::Galley> {
+    let mut job = egui::text::LayoutJob::simple_singleline(text.to_owned(), font.clone(), color);
+    job.wrap.max_width = max_w.max(0.0);
+    job.wrap.max_rows = 1;
+    job.wrap.break_anywhere = true;
+    job.wrap.overflow_character = Some('\u{2026}');
+    ui.painter().layout_job(job)
+}
+
+fn kv_rows(ui: &mut egui::Ui, build: impl FnOnce(&mut Kv)) {
+    let mut kv = Kv::default();
+    build(&mut kv);
+    kv.show(ui);
+}
+
+fn kv<'a>(kv: &'a mut Kv, key: &str, value: impl Into<String>) -> &'a mut KvRow {
+    kv.push(key, value, VAL)
+}
+
+fn kv_colored<'a>(
+    kv: &'a mut Kv,
+    key: &str,
+    value: impl Into<String>,
+    color: Color32,
+) -> &'a mut KvRow {
+    kv.push(key, value, color)
+}
+
+/// A heading for a group of rows inside a card: small caps in bold, trailed by
+/// a rule to the card's edge. Weight alone read as just another key, so the
+/// heading doubles as the divider between one group of rows and the next.
+fn subhead(ui: &mut egui::Ui, text: &str, topic: Topic) {
+    ui.add_space(5.0);
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 7.0;
+        let label = ui.label(
+            RichText::new(text.to_uppercase())
+                .family(fonts::bold())
+                .size(fonts::SMALL - 0.5)
+                .color(SUBHEAD),
+        );
+        help::offer_response(ui, &label, topic);
+        let w = ui.available_width();
+        if w > 1.0 {
+            let (rect, _) = ui.allocate_exact_size(vec2(w, 1.0), Sense::hover());
+            ui.painter().hline(
+                rect.x_range(),
+                label.rect.center().y,
+                Stroke::new(1.0, SUBHEAD_RULE),
+            );
+        }
+    });
+    ui.add_space(1.0);
 }
 
 fn mono(text: impl Into<String>) -> RichText {
@@ -750,7 +1019,7 @@ fn short_codec(name: &str) -> String {
 
 fn db_str(v: f32) -> String {
     if v.is_finite() {
-        format!("{v:.1} dB")
+        format!("{v:+.1} dB")
     } else {
         "—".into()
     }
@@ -758,14 +1027,14 @@ fn db_str(v: f32) -> String {
 
 fn lufs_str(v: f32) -> String {
     if v.is_finite() {
-        format!("{v:.1} LUFS")
+        format!("{v:+.1} LUFS")
     } else {
         "—".into()
     }
 }
 
 /// Horizontal level bar on a −60…0 dB scale with a value readout.
-fn level_bar(ui: &mut egui::Ui, label: &str, db: f32, color: Color32) {
+fn level_bar(ui: &mut egui::Ui, label: &str, db: f32, color: Color32, topic: Topic) {
     let h = 15.0;
     let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), h), Sense::hover());
     let p = ui.painter();
@@ -789,13 +1058,14 @@ fn level_bar(ui: &mut egui::Ui, label: &str, db: f32, color: Color32) {
             Stroke::new(1.0, Color32::from_black_alpha(110)),
         );
     }
-    p.text(
+    let label_at = p.text(
         pos2(rect.left(), rect.center().y),
         Align2::LEFT_CENTER,
         label,
         FontId::new(fonts::SMALL, egui::FontFamily::Proportional),
         KEY,
     );
+    help::offer(ui, label_at, rect, topic);
     p.text(
         pos2(rect.right(), rect.center().y),
         Align2::RIGHT_CENTER,
@@ -822,13 +1092,20 @@ fn peak_color(dbtp: f32) -> Color32 {
 // ---- Cards -----------------------------------------------------------------
 
 fn empty_card(ui: &mut egui::Ui) {
-    card(ui, fonts::icon::INFO, "No file", None, |ui| {
-        ui.label(
-            RichText::new("Drop an audio file on the window, or press Ctrl+O.")
-                .small()
-                .color(KEY),
-        );
-    });
+    card(
+        ui,
+        fonts::icon::INFO,
+        "No file",
+        Topic::FileCard,
+        None,
+        |ui| {
+            ui.label(
+                RichText::new("Drop an audio file on the window, or press Ctrl+O.")
+                    .small()
+                    .color(KEY),
+            );
+        },
+    );
 }
 
 fn file_card(app: &App, ui: &mut egui::Ui) {
@@ -838,58 +1115,69 @@ fn file_card(app: &App, ui: &mut egui::Ui) {
         .path
         .extension()
         .map(|e| e.to_string_lossy().to_uppercase());
-    card(ui, fonts::icon::FILE_AUDIO, "File", ext, |ui| {
-        ui.add(
-            egui::Label::new(
-                RichText::new(info.file_name())
-                    .family(fonts::bold())
-                    .size(fonts::BODY)
-                    .color(VAL),
+    card(
+        ui,
+        fonts::icon::FILE_AUDIO,
+        "File",
+        Topic::FileCard,
+        ext,
+        |ui| {
+            ui.add(
+                egui::Label::new(
+                    RichText::new(info.file_name())
+                        .family(fonts::bold())
+                        .size(fonts::BODY)
+                        .color(VAL),
+                )
+                .truncate(),
             )
-            .truncate(),
-        )
-        .on_hover_text(info.path.display().to_string());
-        ui.add(egui::Label::new(RichText::new(info.directory()).small().color(KEY)).truncate());
-        ui.add_space(2.0);
-        let layout = match info.channels {
-            1 => "mono".to_string(),
-            2 => "stereo".into(),
-            n => format!("{n} ch"),
-        };
-        kv_grid(ui, "file-kv", |ui| {
-            kv(ui, "Container", &info.container);
-            ui.label(RichText::new("Codec").small().color(KEY));
-            ui.add(egui::Label::new(mono(short_codec(&info.codec))).truncate())
-                .on_hover_text(&info.codec);
-            ui.end_row();
-            kv(
-                ui,
-                "Sample rate",
-                format!("{} Hz", fmt_int(info.sample_rate as u64)),
-            );
-            kv(ui, "Channels", format!("{} ({layout})", info.channels));
-            kv(
-                ui,
-                "Bit depth",
-                info.bits_per_sample
-                    .map_or("—".into(), |b| format!("{b} bit")),
-            );
-            kv(ui, "Duration", fmt_time(info.duration_secs()));
-            kv(ui, "Frames", fmt_int(info.frames as u64));
-            kv(ui, "Size", fmt_bytes(info.file_size));
-            if let Some(kbps) = info.bitrate_kbps() {
-                kv(ui, "Bit rate", format!("{kbps:.0} kb/s"));
-            }
-            kv(
-                ui,
-                "In memory",
-                fmt_bytes((info.frames * info.channels * 4) as u64),
-            );
-            if let Some(m) = info.modified {
-                kv(ui, "Modified", fmt_system_time(m));
-            }
-        });
-    });
+            .on_hover_text(info.path.display().to_string());
+            // Wrapped, not truncated: a deep path is worth two lines, and the
+            // hover tooltip was the only way to read the tail of a cut one.
+            ui.add(egui::Label::new(RichText::new(info.directory()).small().color(KEY)).wrap());
+            ui.add_space(2.0);
+            let layout = match info.channels {
+                1 => "mono".to_string(),
+                2 => "stereo".into(),
+                n => format!("{n} ch"),
+            };
+            kv_rows(ui, |rows| {
+                kv(rows, "Container", &info.container).help(Topic::Container);
+                kv(rows, "Codec", short_codec(&info.codec))
+                    .help(Topic::Codec)
+                    .on_hover_text(&info.codec);
+                kv(
+                    rows,
+                    "Sample rate",
+                    format!("{} Hz", fmt_int(info.sample_rate as u64)),
+                )
+                .help(Topic::SampleRate);
+                kv(rows, "Channels", format!("{} ({layout})", info.channels)).help(Topic::Channels);
+                kv(
+                    rows,
+                    "Bit depth",
+                    info.bits_per_sample
+                        .map_or("—".into(), |b| format!("{b} bit")),
+                )
+                .help(Topic::BitDepth);
+                kv(rows, "Duration", fmt_time(info.duration_secs())).help(Topic::Duration);
+                kv(rows, "Frames", fmt_int(info.frames as u64)).help(Topic::Frames);
+                kv(rows, "Size", fmt_bytes(info.file_size)).help(Topic::FileSize);
+                if let Some(kbps) = info.bitrate_kbps() {
+                    kv(rows, "Bit rate", format!("{kbps:.0} kb/s")).help(Topic::BitRate);
+                }
+                kv(
+                    rows,
+                    "In memory",
+                    fmt_bytes((info.frames * info.channels * 4) as u64),
+                )
+                .help(Topic::InMemory);
+                if let Some(m) = info.modified {
+                    kv(rows, "Modified", fmt_system_time(m)).help(Topic::Modified);
+                }
+            });
+        },
+    );
 }
 
 fn header_card(app: &App, ui: &mut egui::Ui) {
@@ -900,31 +1188,35 @@ fn header_card(app: &App, ui: &mut egui::Ui) {
         ui,
         fonts::icon::LIST,
         "WAVE header",
+        Topic::WaveHeaderCard,
         Some(format!("{kind} · {} chunks", wav.chunks.len())),
         |ui| {
             if let Some(f) = &wav.fmt {
-                kv_grid(ui, "fmt-kv", |ui| {
+                kv_rows(ui, |rows| {
                     kv(
-                        ui,
+                        rows,
                         "Format",
                         format!("{} (0x{:04X})", f.format_name(), f.format_tag),
-                    );
-                    kv(ui, "Block align", format!("{} B", f.block_align));
+                    )
+                    .help(Topic::WavFormat);
+                    kv(rows, "Block align", format!("{} B", f.block_align)).help(Topic::BlockAlign);
                     kv(
-                        ui,
+                        rows,
                         "Byte rate",
                         format!("{} kB/s", f.byte_rate as f64 / 1000.0),
-                    );
+                    )
+                    .help(Topic::ByteRate);
                     if let Some(v) = f.valid_bits {
-                        kv(ui, "Valid bits", format!("{v} of {}", f.bits_per_sample));
+                        kv(rows, "Valid bits", format!("{v} of {}", f.bits_per_sample))
+                            .help(Topic::ValidBits);
                     }
                     if let Some(m) = f.channel_mask {
-                        kv(ui, "Channel mask", format!("0x{m:08X}"));
+                        kv(rows, "Channel mask", format!("0x{m:08X}")).help(Topic::ChannelMask);
                     }
-                    kv(ui, "Body", fmt_bytes(wav.riff_size));
+                    kv(rows, "Body", fmt_bytes(wav.riff_size)).help(Topic::RiffBody);
                 });
-                ui.add_space(4.0);
             }
+            subhead(ui, "Chunks", Topic::Chunks);
             egui::Grid::new("chunks")
                 .num_columns(3)
                 .spacing([12.0, 2.0])
@@ -957,43 +1249,49 @@ fn bwf_card(app: &App, ui: &mut egui::Ui) {
         ui,
         fonts::icon::TAG,
         "Broadcast Wave",
+        Topic::BwfCard,
         Some(format!("bext v{}", b.version)),
         |ui| {
             if !b.description.is_empty() {
                 ui.add(egui::Label::new(RichText::new(&b.description).color(VAL)).wrap());
                 ui.add_space(2.0);
             }
-            kv_grid(ui, "bext-kv", |ui| {
+            kv_rows(ui, |rows| {
                 if !b.originator.is_empty() {
-                    kv(ui, "Originator", &b.originator);
+                    kv(rows, "Originator", &b.originator).help(Topic::BwfOriginator);
                 }
                 if !b.originator_reference.is_empty() {
-                    kv(ui, "Reference", &b.originator_reference);
+                    kv(rows, "Reference", &b.originator_reference).help(Topic::BwfReference);
                 }
                 if !b.origination_date.is_empty() || !b.origination_time.is_empty() {
                     kv(
-                        ui,
+                        rows,
                         "Originated",
                         format!("{} {}", b.origination_date, b.origination_time),
-                    );
+                    )
+                    .help(Topic::BwfOriginated);
                 }
                 let tr = b.time_reference as f64 / sr;
                 kv(
-                    ui,
+                    rows,
                     "Time ref",
                     format!("{} ({} smp)", fmt_time(tr), fmt_int(b.time_reference)),
-                );
+                )
+                .help(Topic::BwfTimeRef);
                 if let Some(u) = &b.umid {
-                    kv(ui, "UMID", format!("{}…", &u[..u.len().min(16)]));
+                    kv(rows, "UMID", format!("{}…", &u[..u.len().min(16)])).help(Topic::BwfUmid);
                 }
                 if let Some(l) = b.loudness {
-                    kv(ui, "Integrated", lufs_str(l.integrated_lufs));
-                    kv(ui, "Range", format!("{:.1} LU", l.range_lu));
+                    kv(rows, "Integrated", lufs_str(l.integrated_lufs))
+                        .help(Topic::BwfStoredLoudness);
+                    kv(rows, "Range", format!("{:+.1} LU", l.range_lu))
+                        .help(Topic::BwfStoredLoudness);
                     kv(
-                        ui,
+                        rows,
                         "Max true pk",
-                        format!("{:.1} dBTP", l.max_true_peak_dbtp),
-                    );
+                        format!("{:+.1} dBTP", l.max_true_peak_dbtp),
+                    )
+                    .help(Topic::BwfStoredLoudness);
                 }
             });
             if !b.coding_history.is_empty() {
@@ -1015,13 +1313,20 @@ fn tags_card(app: &App, ui: &mut egui::Ui) {
     if n == 0 {
         return;
     }
-    card(ui, fonts::icon::TAG, "Tags", Some(n.to_string()), |ui| {
-        kv_grid(ui, "tags-kv", |ui| {
-            for (k, v) in riff_info.iter().chain(&info.tags) {
-                kv(ui, k, v);
-            }
-        });
-    });
+    card(
+        ui,
+        fonts::icon::TAG,
+        "Tags",
+        Topic::TagsCard,
+        Some(n.to_string()),
+        |ui| {
+            kv_rows(ui, |rows| {
+                for (k, v) in riff_info.iter().chain(&info.tags) {
+                    kv(rows, k, v);
+                }
+            });
+        },
+    );
 }
 
 fn markers_card(app: &App, ui: &mut egui::Ui) {
@@ -1035,6 +1340,7 @@ fn markers_card(app: &App, ui: &mut egui::Ui) {
         ui,
         fonts::icon::MARKER,
         "Markers",
+        Topic::MarkersCard,
         Some(wav.cues.len().to_string()),
         |ui| {
             egui::Grid::new("cues")
@@ -1060,59 +1366,68 @@ fn markers_card(app: &App, ui: &mut egui::Ui) {
 
 fn loudness_card(app: &App, ui: &mut egui::Ui) {
     let trailing = app.stats.is_none().then(|| "measuring…".to_string());
-    card(ui, fonts::icon::GAUGE, "Loudness", trailing, |ui| {
-        let Some(stats) = &app.stats else {
-            return;
-        };
-        kv_grid(ui, "loud-kv", |ui| {
-            kv(ui, "Integrated", lufs_str(stats.integrated_lufs));
-            kv(ui, "Range", format!("{:.1} LU", stats.loudness_range_lu));
-            kv(ui, "Max momentary", lufs_str(stats.max_momentary_lufs));
-            kv(ui, "Max short-term", lufs_str(stats.max_short_term_lufs));
-            if let Some(c) = stats.correlation {
-                kv(ui, "Correlation", format!("{c:+.2}"));
+    card(
+        ui,
+        fonts::icon::GAUGE,
+        "Loudness",
+        Topic::LoudnessCard,
+        trailing,
+        |ui| {
+            let Some(stats) = &app.stats else {
+                return;
+            };
+            kv_rows(ui, |rows| {
+                kv(rows, "Integrated", lufs_str(stats.integrated_lufs)).help(Topic::Integrated);
+                kv(rows, "Range", format!("{:+.1} LU", stats.loudness_range_lu))
+                    .help(Topic::LoudnessRange);
+                kv(rows, "Max momentary", lufs_str(stats.max_momentary_lufs))
+                    .help(Topic::MaxMomentary);
+                kv(rows, "Max short-term", lufs_str(stats.max_short_term_lufs))
+                    .help(Topic::MaxShortTerm);
+                if let Some(c) = stats.correlation {
+                    kv(rows, "Correlation", format!("{c:+.2}")).help(Topic::Correlation);
+                }
+            });
+            if !stats.integrated_lufs.is_finite() {
+                return;
             }
-        });
-        if !stats.integrated_lufs.is_finite() {
-            return;
-        }
-        ui.add_space(4.0);
-        ui.label(RichText::new("Against targets").small().color(KEY));
-        kv_grid(ui, "targets-kv", |ui| {
-            for (name, target) in [
-                ("EBU R128 · −23", -23.0f32),
-                ("Podcast · −16", -16.0),
-                ("Streaming · −14", -14.0),
-            ] {
-                let d = stats.integrated_lufs - target;
-                let color = if d.abs() <= 1.0 {
-                    GOOD
-                } else if d.abs() <= 3.0 {
-                    WARN
-                } else {
-                    VAL
-                };
-                kv_colored(ui, name, format!("{d:+.1} LU"), color);
-            }
-            let tp = stats
-                .channels
-                .iter()
-                .map(|c| c.true_peak_dbtp)
-                .fold(f32::NEG_INFINITY, f32::max);
-            let pk = stats
-                .channels
-                .iter()
-                .map(|c| c.sample_peak_db)
-                .fold(f32::NEG_INFINITY, f32::max);
-            let rms = stats
-                .channels
-                .iter()
-                .map(|c| c.rms_db)
-                .fold(f32::NEG_INFINITY, f32::max);
-            kv_colored(ui, "Headroom", db_str(-tp), peak_color(tp));
-            kv(ui, "Crest factor", db_str(pk - rms));
-        });
-    });
+            subhead(ui, "Against targets", Topic::AgainstTargets);
+            kv_rows(ui, |rows| {
+                for (name, target) in [
+                    ("EBU R128 · −23", -23.0f32),
+                    ("Podcast · −16", -16.0),
+                    ("Streaming · −14", -14.0),
+                ] {
+                    let d = stats.integrated_lufs - target;
+                    let color = if d.abs() <= 1.0 {
+                        GOOD
+                    } else if d.abs() <= 3.0 {
+                        WARN
+                    } else {
+                        VAL
+                    };
+                    kv_colored(rows, name, format!("{d:+.1} LU"), color).help(Topic::TargetDelta);
+                }
+                let tp = stats
+                    .channels
+                    .iter()
+                    .map(|c| c.true_peak_dbtp)
+                    .fold(f32::NEG_INFINITY, f32::max);
+                let pk = stats
+                    .channels
+                    .iter()
+                    .map(|c| c.sample_peak_db)
+                    .fold(f32::NEG_INFINITY, f32::max);
+                let rms = stats
+                    .channels
+                    .iter()
+                    .map(|c| c.rms_db)
+                    .fold(f32::NEG_INFINITY, f32::max);
+                kv_colored(rows, "Headroom", db_str(-tp), peak_color(tp)).help(Topic::Headroom);
+                kv(rows, "Crest factor", db_str(pk - rms)).help(Topic::CrestFactor);
+            });
+        },
+    );
 }
 
 fn levels_card(app: &mut App, ui: &mut egui::Ui) {
@@ -1121,64 +1436,75 @@ fn levels_card(app: &mut App, ui: &mut egui::Ui) {
     };
     let nch = audio.channels.len();
     let mut changed = false;
-    card(ui, fonts::icon::BARS, "Levels", None, |ui| {
-        let Some(stats) = app.stats.clone() else {
-            ui.label(RichText::new("measuring…").small().color(KEY));
-            return;
-        };
-        for ch in 0..nch {
-            let Some(cs) = stats.channels.get(ch) else {
-                continue;
+    card(
+        ui,
+        fonts::icon::BARS,
+        "Levels",
+        Topic::LevelsCard,
+        None,
+        |ui| {
+            let Some(stats) = app.stats.clone() else {
+                ui.label(RichText::new("measuring…").small().color(KEY));
+                return;
             };
-            if ch > 0 {
-                ui.add_space(4.0);
-            }
-            ui.horizontal(|ui| {
-                ui.label(
-                    RichText::new(channel_label(ch, nch))
-                        .family(fonts::bold())
-                        .size(fonts::SMALL)
-                        .color(VAL),
-                );
-                if nch > 1 {
-                    let mut m = app.mutes[ch];
-                    if ui.toggle_value(&mut m, "M").on_hover_text("Mute").changed() {
-                        app.mutes[ch] = m;
-                        changed = true;
-                    }
-                    let mut s = app.solo == Some(ch);
-                    if ui.toggle_value(&mut s, "S").on_hover_text("Solo").changed() {
-                        app.solo = if s { Some(ch) } else { None };
-                        changed = true;
-                    }
+            for ch in 0..nch {
+                let Some(cs) = stats.channels.get(ch) else {
+                    continue;
+                };
+                if ch > 0 {
+                    ui.add_space(4.0);
                 }
-                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    if cs.clipped_samples > 0 {
-                        ui.label(
-                            RichText::new(format!(
-                                "{} {} clipped · {} runs",
-                                fonts::icon::WARN,
-                                fmt_int(cs.clipped_samples as u64),
-                                cs.clipped_runs
-                            ))
-                            .small()
-                            .color(BAD),
-                        );
-                    } else {
-                        ui.label(RichText::new("no clipping").small().color(KEY));
+                ui.horizontal(|ui| {
+                    ui.label(
+                        RichText::new(channel_label(ch, nch))
+                            .family(fonts::bold())
+                            .size(fonts::SMALL)
+                            .color(VAL),
+                    );
+                    if nch > 1 {
+                        let mut m = app.mutes[ch];
+                        if ui.toggle_value(&mut m, "M").on_hover_text("Mute").changed() {
+                            app.mutes[ch] = m;
+                            changed = true;
+                        }
+                        let mut s = app.solo == Some(ch);
+                        if ui.toggle_value(&mut s, "S").on_hover_text("Solo").changed() {
+                            app.solo = if s { Some(ch) } else { None };
+                            changed = true;
+                        }
                     }
+                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                        let note = if cs.clipped_samples > 0 {
+                            ui.label(
+                                RichText::new(format!(
+                                    "{} {} clipped · {} runs",
+                                    fonts::icon::WARN,
+                                    fmt_int(cs.clipped_samples as u64),
+                                    cs.clipped_runs
+                                ))
+                                .small()
+                                .color(BAD),
+                            )
+                        } else {
+                            ui.label(RichText::new("no clipping").small().color(KEY))
+                        };
+                        help::offer_response(ui, &note, Topic::Clipping);
+                    });
                 });
-            });
-            level_bar(ui, "Peak", cs.sample_peak_db, peak_color(cs.true_peak_dbtp));
-            level_bar(ui, "TP", cs.true_peak_dbtp, peak_color(cs.true_peak_dbtp));
-            level_bar(ui, "RMS", cs.rms_db, Color32::from_rgb(96, 118, 172));
-            ui.label(
-                RichText::new(format!("DC offset {:+.4}", cs.dc_offset))
-                    .small()
-                    .color(if cs.dc_offset.abs() > 0.01 { WARN } else { KEY }),
-            );
-        }
-    });
+                let peak = peak_color(cs.true_peak_dbtp);
+                level_bar(ui, "Peak", cs.sample_peak_db, peak, Topic::PeakLevel);
+                level_bar(ui, "TP", cs.true_peak_dbtp, peak, Topic::TruePeakLevel);
+                let rms = Color32::from_rgb(96, 118, 172);
+                level_bar(ui, "RMS", cs.rms_db, rms, Topic::RmsLevel);
+                let dc = ui.label(
+                    RichText::new(format!("DC offset {:+.4}", cs.dc_offset))
+                        .small()
+                        .color(if cs.dc_offset.abs() > 0.01 { WARN } else { KEY }),
+                );
+                help::offer_response(ui, &dc, Topic::DcOffset);
+            }
+        },
+    );
     if changed {
         app.apply_mutes();
     }
@@ -1192,11 +1518,12 @@ fn analysis_card(app: &App, ui: &mut egui::Ui) {
         ui,
         fonts::icon::COGS,
         "Analysis",
+        Topic::AnalysisCard,
         Some(format!("{:?}", app.settings.colormap)),
         |ui| {
-            kv_grid(ui, "an-kv", |ui| {
+            kv_rows(ui, |rows| {
                 kv(
-                    ui,
+                    rows,
                     "Window",
                     format!(
                         "{} {:?} · {}",
@@ -1204,46 +1531,53 @@ fn analysis_card(app: &App, ui: &mut egui::Ui) {
                         st.window,
                         st.overlap_label()
                     ),
-                );
+                )
+                .help(Topic::AnWindow);
                 kv(
-                    ui,
+                    rows,
                     "Hop",
                     format!("{hop} smp · {:.1} ms", hop as f64 / sr * 1000.0),
-                );
+                )
+                .help(Topic::AnHop);
                 kv(
-                    ui,
+                    rows,
                     "Resolution",
                     format!(
                         "{:.1} Hz · {:.1} ms",
                         sr / st.window_size as f64,
                         st.window_size as f64 / sr * 1000.0
                     ),
-                );
-                kv(ui, "Reassignment", if st.reassign { "on" } else { "off" });
+                )
+                .help(Topic::Resolution);
+                kv(rows, "Reassignment", if st.reassign { "on" } else { "off" })
+                    .help(Topic::Reassignment);
                 let tile = app.detail.iter().flatten().next();
                 kv(
-                    ui,
+                    rows,
                     "Detail tile",
                     tile.map_or("—".into(), |t| {
                         format!("{} cols · {:.2} smp", fmt_int(t.columns as u64), t.stride)
                     }),
-                );
+                )
+                .help(Topic::DetailTile);
                 let span = app.view.len() / sr;
                 kv(
-                    ui,
+                    rows,
                     "View",
                     format!(
                         "{} – {}",
                         fmt_time(app.view.start / sr),
                         fmt_time(app.view.end / sr)
                     ),
-                );
-                kv(ui, "Span", format!("{span:.3} s"));
+                )
+                .help(Topic::ViewRange);
+                kv(rows, "Span", format!("{span:.3} s")).help(Topic::ViewSpan);
                 kv(
-                    ui,
+                    rows,
                     "Floor / ceiling",
                     format!("{:.0} / {:.0} dB", app.settings.db_min, app.settings.db_max),
-                );
+                )
+                .help(Topic::FloorCeiling);
             });
         },
     );
@@ -1251,52 +1585,67 @@ fn analysis_card(app: &App, ui: &mut egui::Ui) {
 
 fn cursor_card(app: &App, ui: &mut egui::Ui) {
     let sr = app.sample_rate().max(1.0);
-    card(ui, fonts::icon::CLOCK, "Cursor", None, |ui| {
-        kv_grid(ui, "cur-kv", |ui| {
-            let ph = app
-                .engine
-                .as_ref()
-                .map_or(0.0, |e| e.playhead() as f64 / sr);
-            kv(ui, "Playhead", fmt_time(ph));
-            kv(
-                ui,
-                "Pointer",
-                if app.hover_info.is_empty() {
-                    "—".to_string()
-                } else {
-                    app.hover_info.clone()
-                },
-            );
-            match app.selection {
-                Some((a, b)) if (a - b).abs() >= 1.0 => {
-                    let (a, b) = (a.min(b) / sr, a.max(b) / sr);
-                    kv(
-                        ui,
-                        "Selection",
-                        format!("{} – {} ({:.3} s)", fmt_time(a), fmt_time(b), b - a),
-                    );
+    card(
+        ui,
+        fonts::icon::CLOCK,
+        "Cursor",
+        Topic::CursorCard,
+        None,
+        |ui| {
+            kv_rows(ui, |rows| {
+                let ph = app
+                    .engine
+                    .as_ref()
+                    .map_or(0.0, |e| e.playhead() as f64 / sr);
+                kv(rows, "Playhead", fmt_time(ph)).help(Topic::Playhead);
+                kv(
+                    rows,
+                    "Pointer",
+                    if app.hover_info.is_empty() {
+                        "—".to_string()
+                    } else {
+                        app.hover_info.clone()
+                    },
+                )
+                .help(Topic::PointerReadout);
+                match app.selection {
+                    Some((a, b)) if (a - b).abs() >= 1.0 => {
+                        let (a, b) = (a.min(b) / sr, a.max(b) / sr);
+                        kv(
+                            rows,
+                            "Selection",
+                            format!("{} – {} ({:.3} s)", fmt_time(a), fmt_time(b), b - a),
+                        )
+                        .help(Topic::Selection);
+                    }
+                    _ => {
+                        kv(rows, "Selection", "—").help(Topic::Selection);
+                    }
                 }
-                _ => kv(ui, "Selection", "—"),
-            }
-            match app.range {
-                Some((a, b)) => {
-                    let (a, b) = (a / sr, b / sr);
-                    kv(
-                        ui,
-                        "Range",
-                        format!("{} – {} ({:.3} s)", fmt_time(a), fmt_time(b), b - a),
-                    );
-                    kv_colored(
-                        ui,
-                        "Loop",
-                        if app.loop_enabled { "on" } else { "off" },
-                        if app.loop_enabled { GOOD } else { VAL },
-                    );
+                match app.range {
+                    Some((a, b)) => {
+                        let (a, b) = (a / sr, b / sr);
+                        kv(
+                            rows,
+                            "Range",
+                            format!("{} – {} ({:.3} s)", fmt_time(a), fmt_time(b), b - a),
+                        )
+                        .help(Topic::RulerRange);
+                        kv_colored(
+                            rows,
+                            "Loop",
+                            if app.loop_enabled { "on" } else { "off" },
+                            if app.loop_enabled { GOOD } else { VAL },
+                        )
+                        .help(Topic::LoopToggle);
+                    }
+                    None => {
+                        kv(rows, "Range", "—").help(Topic::RulerRange);
+                    }
                 }
-                None => kv(ui, "Range", "—"),
-            }
-        });
-    });
+            });
+        },
+    );
 }
 
 /// The settings dialog: what to show, and every control for the three views.
@@ -1380,10 +1729,15 @@ const VALUE_W: f32 = 96.0;
 const COMBO_W: f32 = 150.0;
 
 /// One labelled control row inside a settings grid.
-fn setting(ui: &mut egui::Ui, label: &str, hint: &str, control: impl FnOnce(&mut egui::Ui)) {
+fn setting(
+    ui: &mut egui::Ui,
+    label: &str,
+    topic: Option<Topic>,
+    control: impl FnOnce(&mut egui::Ui),
+) {
     let l = ui.add(egui::Label::new(RichText::new(label).color(KEY)).truncate());
-    if !hint.is_empty() {
-        l.on_hover_text(hint);
+    if let Some(topic) = topic {
+        help::offer_response(ui, &l, topic);
     }
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = CTRL_GAP;
@@ -1442,79 +1796,89 @@ fn fmt_ms(ms: f64) -> String {
     }
 }
 
-fn fmt_rate(sr: f64) -> String {
-    format!("{:.1} kHz", sr / 1000.0)
-}
-
 fn combo(id: &str) -> egui::ComboBox {
     egui::ComboBox::from_id_salt(id).width(COMBO_W)
 }
 
 fn panes_card(app: &mut App, ui: &mut egui::Ui) {
-    wide_card(ui, fonts::icon::LIST, "Panes", None, |ui| {
-        let both = app.settings.show_waveform && app.settings.show_spectrogram;
-        let merged = both && app.settings.merge_views;
-        settings_grid(ui, "panes-grid", |ui| {
-            setting(ui, "Show", "", |ui| {
-                ui.checkbox(&mut app.settings.show_waveform, "Waveform");
-                ui.checkbox(&mut app.settings.show_spectrogram, "Spectrogram");
-                ui.checkbox(&mut app.settings.show_spectrum, "Spectrum");
-            });
-            setting(
-                ui,
-                "Merge",
-                "Draw the waveform over the spectrogram in one pane.",
-                |ui| {
+    wide_card(
+        ui,
+        fonts::icon::LIST,
+        "Panes",
+        Topic::PanesCard,
+        None,
+        |ui| {
+            let both = app.settings.show_waveform && app.settings.show_spectrogram;
+            let merged = both && app.settings.merge_views;
+            settings_grid(ui, "panes-grid", |ui| {
+                setting(ui, "Show", Some(Topic::ShowPanes), |ui| {
+                    ui.checkbox(&mut app.settings.show_waveform, "Waveform");
+                    ui.checkbox(&mut app.settings.show_spectrogram, "Spectrogram");
+                    ui.checkbox(&mut app.settings.show_spectrum, "Spectrum");
+                });
+                setting(ui, "Merge", Some(Topic::MergeViews), |ui| {
                     ui.add_enabled_ui(both, |ui| {
                         ui.checkbox(&mut app.settings.merge_views, "Waveform over spectrogram");
                     });
-                },
-            );
-            // Enabled-state scopes must sit inside the control cell: a scope
-            // around the whole row would swallow the grid's end_row.
-            setting(ui, "Waveform opacity", "", |ui| {
-                ui.add_enabled_ui(merged, |ui| {
-                    ui.add(
-                        egui::Slider::new(&mut app.settings.merge_opacity, 0.05..=1.0)
-                            .fixed_decimals(2),
-                    );
                 });
+                // Enabled-state scopes must sit inside the control cell: a scope
+                // around the whole row would swallow the grid's end_row.
+                setting(
+                    ui,
+                    "Waveform opacity",
+                    Some(Topic::MergeWaveOpacity),
+                    |ui| {
+                        ui.add_enabled_ui(merged, |ui| {
+                            ui.add(
+                                egui::Slider::new(&mut app.settings.merge_opacity, 0.05..=1.0)
+                                    .fixed_decimals(2),
+                            );
+                        });
+                    },
+                );
+                setting(
+                    ui,
+                    "Spectrogram opacity",
+                    Some(Topic::MergeSpecOpacity),
+                    |ui| {
+                        ui.add_enabled_ui(merged, |ui| {
+                            ui.add(
+                                egui::Slider::new(&mut app.settings.merge_spec_opacity, 0.05..=1.0)
+                                    .fixed_decimals(2),
+                            );
+                        });
+                    },
+                );
             });
-            setting(ui, "Spectrogram opacity", "", |ui| {
-                ui.add_enabled_ui(merged, |ui| {
-                    ui.add(
-                        egui::Slider::new(&mut app.settings.merge_spec_opacity, 0.05..=1.0)
-                            .fixed_decimals(2),
-                    );
-                });
-            });
-        });
-        if !both && app.settings.merge_views {
-            ui.label(
-                RichText::new("Merge needs both the waveform and the spectrogram.").color(KEY),
-            );
-        }
-        if !app.settings.show_waveform && !app.settings.show_spectrogram {
-            ui.label(
-                RichText::new(format!(
-                    "{} Nothing left to draw; turn one back on.",
-                    fonts::icon::WARN
-                ))
-                .color(WARN),
-            );
-        }
-    });
+            if !both && app.settings.merge_views {
+                ui.label(
+                    RichText::new("Merge needs both the waveform and the spectrogram.").color(KEY),
+                );
+            }
+            if !app.settings.show_waveform && !app.settings.show_spectrogram {
+                ui.label(
+                    RichText::new(format!(
+                        "{} Nothing left to draw; turn one back on.",
+                        fonts::icon::WARN
+                    ))
+                    .color(WARN),
+                );
+            }
+        },
+    );
 }
 
 fn spectrogram_card(app: &mut App, ui: &mut egui::Ui) {
-    wide_card(ui, fonts::icon::BARS, "Spectrogram", None, |ui| {
-        let mut stft = app.settings.stft;
-        settings_grid(ui, "stft-grid", |ui| {
-            setting(
-                ui,
-                "Window size",
-                "Samples per FFT. Larger: finer frequency, coarser time.",
-                |ui| {
+    wide_card(
+        ui,
+        fonts::icon::BARS,
+        "Spectrogram",
+        Topic::SpectrogramCard,
+        None,
+        |ui| {
+            let mut stft = app.settings.stft;
+            settings_grid(ui, "stft-grid", |ui| {
+                setting(ui, "Window size", Some(Topic::WindowSize), |ui| {
                     combo("win-size")
                         .selected_text(stft.window_size.to_string())
                         .show_ui(ui, |ui| {
@@ -1522,80 +1886,63 @@ fn spectrogram_card(app: &mut App, ui: &mut egui::Ui) {
                                 ui.selectable_value(&mut stft.window_size, s, s.to_string());
                             }
                         });
-                },
-            );
-            setting(ui, "Overlap", "", |ui| {
-                let mut overlap = (stft.overlap_num, stft.overlap_den);
-                combo("overlap")
-                    .selected_text(stft.overlap_label())
-                    .show_ui(ui, |ui| {
-                        for (n, d) in [(0u8, 1u8), (1, 2), (3, 4), (7, 8)] {
-                            let label = format!("{}%", 100 * n as u32 / d as u32);
-                            ui.selectable_value(&mut overlap, (n, d), label);
-                        }
-                    });
-                (stft.overlap_num, stft.overlap_den) = overlap;
-            });
-            setting(ui, "Window", "", |ui| {
-                combo("win-kind")
-                    .selected_text(stft.window.name())
-                    .show_ui(ui, |ui| {
-                        for w in WindowKind::ALL {
-                            ui.selectable_value(&mut stft.window, w, w.name());
-                        }
-                    });
-            });
-            let sr = app.sample_rate().max(1.0);
-            let hint = format!(
-                "What those choices come out to at {}: the width of one frequency bin, \
-                 the span of audio in each frame, and how far the window steps between \
-                 frames.",
-                fmt_rate(sr)
-            );
-            setting(ui, "Resolution", &hint, |ui| {
-                ui.label(mono(format!(
-                    "bin {} · frame {} · hop {}",
-                    fmt_hz(sr / stft.window_size as f64),
-                    fmt_ms(stft.window_size as f64 / sr * 1000.0),
-                    fmt_ms(stft.hop() as f64 / sr * 1000.0),
-                )));
-            });
-            setting(
-                ui,
-                "Reassignment",
-                "Moves each bin's energy to its true frequency and time instead of \
-                 smearing it across the window. Three FFTs per frame instead of one.",
-                |ui| {
+                });
+                setting(ui, "Overlap", Some(Topic::Overlap), |ui| {
+                    let mut overlap = (stft.overlap_num, stft.overlap_den);
+                    combo("overlap")
+                        .selected_text(stft.overlap_label())
+                        .show_ui(ui, |ui| {
+                            for (n, d) in [(0u8, 1u8), (1, 2), (3, 4), (7, 8)] {
+                                let label = format!("{}%", 100 * n as u32 / d as u32);
+                                ui.selectable_value(&mut overlap, (n, d), label);
+                            }
+                        });
+                    (stft.overlap_num, stft.overlap_den) = overlap;
+                });
+                setting(ui, "Window", Some(Topic::WindowKind), |ui| {
+                    combo("win-kind")
+                        .selected_text(stft.window.name())
+                        .show_ui(ui, |ui| {
+                            for w in WindowKind::ALL {
+                                ui.selectable_value(&mut stft.window, w, w.name());
+                            }
+                        });
+                });
+                let sr = app.sample_rate().max(1.0);
+                setting(ui, "Resolution", Some(Topic::Resolution), |ui| {
+                    ui.label(mono(format!(
+                        "bin {} · frame {} · hop {}",
+                        fmt_hz(sr / stft.window_size as f64),
+                        fmt_ms(stft.window_size as f64 / sr * 1000.0),
+                        fmt_ms(stft.hop() as f64 / sr * 1000.0),
+                    )));
+                });
+                setting(ui, "Reassignment", Some(Topic::Reassignment), |ui| {
                     ui.checkbox(&mut stft.reassign, "Sharper lines and clicks");
-                },
-            );
-        });
-        if stft != app.settings.stft {
-            app.settings.stft = stft;
-            app.recompute_spectrograms();
-        }
-        ui.add_space(4.0);
-        settings_grid(ui, "spec-grid", |ui| {
-            setting(ui, "Colour map", "", |ui| {
-                combo("cmap")
-                    .selected_text(app.settings.colormap.name())
-                    .show_ui(ui, |ui| {
-                        for c in ColorMap::ALL {
-                            ui.selectable_value(&mut app.settings.colormap, c, c.name());
-                        }
-                    });
-                let lut = app
-                    .settings
-                    .colormap
-                    .lut_with(app.settings.spec_contrast, &app.settings.custom_stops);
-                palette_strip(ui, &lut);
+                });
             });
-            if app.settings.colormap == ColorMap::Custom {
-                setting(
-                    ui,
-                    "Custom colours",
-                    "Quiet, medium and loud. Black below the quiet colour.",
-                    |ui| {
+            if stft != app.settings.stft {
+                app.settings.stft = stft;
+                app.recompute_spectrograms();
+            }
+            ui.add_space(4.0);
+            settings_grid(ui, "spec-grid", |ui| {
+                setting(ui, "Colour map", Some(Topic::ColourMap), |ui| {
+                    combo("cmap")
+                        .selected_text(app.settings.colormap.name())
+                        .show_ui(ui, |ui| {
+                            for c in ColorMap::ALL {
+                                ui.selectable_value(&mut app.settings.colormap, c, c.name());
+                            }
+                        });
+                    let lut = app
+                        .settings
+                        .colormap
+                        .lut_with(app.settings.spec_contrast, &app.settings.custom_stops);
+                    palette_strip(ui, &lut);
+                });
+                if app.settings.colormap == ColorMap::Custom {
+                    setting(ui, "Custom colours", Some(Topic::CustomColours), |ui| {
                         for (i, label) in ["quiet", "medium", "loud"].iter().enumerate() {
                             ui.color_edit_button_srgb(&mut app.settings.custom_stops[i])
                                 .on_hover_text(*label);
@@ -1603,77 +1950,65 @@ fn spectrogram_card(app: &mut App, ui: &mut egui::Ui) {
                         if ui.button("Reset").clicked() {
                             app.settings.custom_stops = auriscope::analysis::DEFAULT_CUSTOM;
                         }
-                    },
-                );
-            }
-            setting(
-                ui,
-                "Contrast",
-                "Gamma on the colour map. Above 1 darkens quiet material, below 1 lifts it.",
-                |ui| {
+                    });
+                }
+                setting(ui, "Contrast", Some(Topic::Contrast), |ui| {
                     ui.add(
                         egui::Slider::new(&mut app.settings.spec_contrast, 0.4..=2.5)
                             .fixed_decimals(2)
                             .logarithmic(true),
                     );
-                },
-            );
-            setting(ui, "Frequency axis", "", |ui| {
-                ui.checkbox(&mut app.settings.log_frequency, "Logarithmic");
-            });
-            setting(ui, "Floor", "Level drawn as the darkest colour.", |ui| {
-                ui.add(
-                    egui::Slider::new(&mut app.settings.db_min, -140.0..=-20.0)
-                        .fixed_decimals(0)
-                        .suffix(" dB"),
-                );
-            });
-            setting(
-                ui,
-                "Ceiling",
-                "Level drawn as the brightest colour.",
-                |ui| {
+                });
+                setting(ui, "Frequency axis", Some(Topic::FrequencyAxis), |ui| {
+                    ui.checkbox(&mut app.settings.log_frequency, "Logarithmic");
+                });
+                setting(ui, "Floor", Some(Topic::Floor), |ui| {
+                    ui.add(
+                        egui::Slider::new(&mut app.settings.db_min, -140.0..=-20.0)
+                            .fixed_decimals(0)
+                            .suffix(" dB"),
+                    );
+                });
+                setting(ui, "Ceiling", Some(Topic::Ceiling), |ui| {
                     ui.add(
                         egui::Slider::new(&mut app.settings.db_max, -60.0..=0.0)
                             .fixed_decimals(0)
                             .suffix(" dB"),
                     );
-                },
-            );
-            if app.settings.db_max <= app.settings.db_min + 6.0 {
-                app.settings.db_max = app.settings.db_min + 6.0;
-            }
-            setting(
-                ui,
-                "Lowest frequency",
-                "Bottom of the logarithmic axis.",
-                |ui| {
+                });
+                if app.settings.db_max <= app.settings.db_min + 6.0 {
+                    app.settings.db_max = app.settings.db_min + 6.0;
+                }
+                setting(ui, "Lowest frequency", Some(Topic::LowestFrequency), |ui| {
                     ui.add(
                         egui::Slider::new(&mut app.settings.min_hz, 10.0..=200.0)
                             .fixed_decimals(0)
                             .suffix(" Hz")
                             .logarithmic(true),
                     );
-                },
-            );
-        });
-    });
+                });
+            });
+        },
+    );
 }
 
 fn waveform_card(app: &mut App, ui: &mut egui::Ui) {
-    wide_card(ui, fonts::icon::GAUGE, "Waveform", None, |ui| {
-        let merged =
-            app.settings.merge_views && app.settings.show_waveform && app.settings.show_spectrogram;
-        settings_grid(ui, "wave-grid", |ui| {
-            setting(ui, "Overlays", "", |ui| {
-                ui.checkbox(&mut app.settings.show_rms, "RMS");
-                ui.checkbox(&mut app.settings.show_db_scale, "dB scale");
-            });
-            setting(
-                ui,
-                "Colour",
-                "Waveform colour. The RMS overlay is a lighter tint of it.",
-                |ui| {
+    wide_card(
+        ui,
+        fonts::icon::GAUGE,
+        "Waveform",
+        Topic::WaveformCard,
+        None,
+        |ui| {
+            let merged = app.settings.merge_views
+                && app.settings.show_waveform
+                && app.settings.show_spectrogram;
+            settings_grid(ui, "wave-grid", |ui| {
+                setting(ui, "Overlays", Some(Topic::WaveOverlays), |ui| {
+                    ui.checkbox(&mut app.settings.show_rms, "RMS");
+                    ui.checkbox(&mut app.settings.show_db_scale, "dB scale");
+                });
+                setting(ui, "Colour", Some(Topic::WaveColour), |ui| {
                     ui.color_edit_button_srgb(&mut app.settings.wave_color);
                     const SWATCHES: [([u8; 3], &str); 5] = [
                         (super::DEFAULT_WAVE_COLOR, "Blue"),
@@ -1698,13 +2033,8 @@ fn waveform_card(app: &mut App, ui: &mut egui::Ui) {
                             app.settings.wave_color = rgb;
                         }
                     }
-                },
-            );
-            setting(
-                ui,
-                "Vertical zoom",
-                "Alt+Shift+wheel over the waveform does the same.",
-                |ui| {
+                });
+                setting(ui, "Vertical zoom", Some(Topic::VerticalZoom), |ui| {
                     // Leave room for the reset button so the track still ends
                     // where the other sliders do.
                     ui.spacing_mut().slider_width -= 34.0;
@@ -1717,65 +2047,63 @@ fn waveform_card(app: &mut App, ui: &mut egui::Ui) {
                     if ui.button("1x").on_hover_text("Reset").clicked() {
                         app.settings.wave_v_zoom = 1.0;
                     }
-                },
-            );
-            setting(
-                ui,
-                "Height",
-                "Share of the pane given to the waveform. Not used while merged.",
-                |ui| {
+                });
+                setting(ui, "Height", Some(Topic::WaveHeight), |ui| {
                     ui.add_enabled_ui(!merged, |ui| {
                         ui.add(
                             egui::Slider::new(&mut app.settings.waveform_fraction, 0.05..=0.95)
                                 .fixed_decimals(2),
                         );
                     });
-                },
-            );
-        });
-    });
+                });
+            });
+        },
+    );
 }
 
 fn spectrum_card(app: &mut App, ui: &mut egui::Ui) {
-    wide_card(ui, fonts::icon::BARS, "Spectrum", None, |ui| {
-        let mut size = app.settings.spectrum_size;
-        settings_grid(ui, "spectrum-grid", |ui| {
-            setting(ui, "FFT size", "", |ui| {
-                combo("spectrum-size")
-                    .selected_text(size.to_string())
-                    .show_ui(ui, |ui| {
-                        for s in [1024usize, 2048, 4096, 8192, 16384] {
-                            ui.selectable_value(&mut size, s, s.to_string());
-                        }
-                    });
-            });
-            setting(
-                ui,
-                "Averaging",
-                "How much of the previous frame is kept.",
-                |ui| {
+    wide_card(
+        ui,
+        fonts::icon::BARS,
+        "Spectrum",
+        Topic::SpectrumCard,
+        None,
+        |ui| {
+            let mut size = app.settings.spectrum_size;
+            settings_grid(ui, "spectrum-grid", |ui| {
+                setting(ui, "FFT size", Some(Topic::SpectrumSize), |ui| {
+                    combo("spectrum-size")
+                        .selected_text(size.to_string())
+                        .show_ui(ui, |ui| {
+                            for s in [1024usize, 2048, 4096, 8192, 16384] {
+                                ui.selectable_value(&mut size, s, s.to_string());
+                            }
+                        });
+                });
+                setting(ui, "Averaging", Some(Topic::SpectrumAveraging), |ui| {
                     ui.add(
                         egui::Slider::new(&mut app.settings.spectrum_averaging, 0.0..=0.95)
                             .fixed_decimals(2),
                     );
-                },
-            );
-        });
-        if size != app.settings.spectrum_size {
-            app.settings.spectrum_size = size;
-            if let Some(e) = &app.engine {
-                app.live = Some(auriscope::analysis::LiveSpectrum::new(size, e.device_rate));
+                });
+            });
+            if size != app.settings.spectrum_size {
+                app.settings.spectrum_size = size;
+                if let Some(e) = &app.engine {
+                    app.live = Some(auriscope::analysis::LiveSpectrum::new(size, e.device_rate));
+                }
             }
-        }
-    });
+        },
+    );
 }
 
 fn keys_card(ui: &mut egui::Ui) {
-    wide_card(ui, fonts::icon::INFO, "Keys", None, |ui| {
-        const KEYS: [(&str, &str); 16] = [
+    wide_card(ui, fonts::icon::INFO, "Keys", Topic::KeysCard, None, |ui| {
+        const KEYS: [(&str, &str); 17] = [
             ("Space", "play / pause"),
             ("Ctrl+O", "open a file"),
             ("Ctrl+,", "settings"),
+            ("F1", "help mode: hover a label to read what it means"),
             ("Click", "seek, clear the highlight"),
             ("Drag", "select; the range stays on the ruler"),
             ("Ruler handles", "drag to adjust the range"),
@@ -1810,82 +2138,145 @@ fn keys_card(ui: &mut egui::Ui) {
 }
 
 fn about_card(app: &mut App, ui: &mut egui::Ui) {
-    wide_card(ui, fonts::icon::TAG, "About", None, |ui| {
-        kv_grid(ui, "about-grid", |ui| {
-            kv(ui, "Version", update::CURRENT);
-            if update::is_dev_build() {
-                kv_colored(ui, "Build", update::GIT_DESCRIBE, ACCENT);
-            }
-            ui.label(RichText::new("Source").small().color(KEY));
-            ui.hyperlink_to(
-                RichText::new("github.com/frdcmp/auriscope").monospace(),
-                update::REPO_URL,
-            );
-            ui.end_row();
-        });
-        ui.add_space(4.0);
-        if !update::ENABLED {
-            ui.label(
-                RichText::new("Updates come through your package manager.")
-                    .small()
-                    .color(KEY),
-            );
-            return;
-        }
-        ui.horizontal(|ui| {
-            ui.checkbox(
-                &mut app.settings.check_updates,
-                "Check for updates on startup",
-            )
-            .on_hover_text(
-                "Asks api.github.com for the latest release, at most once a day. \
-                     Nothing is downloaded and nothing about you is sent.",
-            );
-            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                let checking = app.updater.status == update::Status::Checking;
-                if ui
-                    .add_enabled(!checking, egui::Button::new("Check now"))
-                    .clicked()
-                {
-                    app.updater.start();
+    wide_card(
+        ui,
+        fonts::icon::TAG,
+        "About",
+        Topic::AboutCard,
+        None,
+        |ui| {
+            kv_rows(ui, |rows| {
+                kv(rows, "Version", update::CURRENT);
+                if update::is_dev_build() {
+                    kv_colored(rows, "Build", update::GIT_DESCRIBE, ACCENT);
                 }
             });
-        });
-        ui.horizontal(|ui| match &app.updater.status {
-            update::Status::Idle => {
-                ui.label(RichText::new("Not checked yet.").small().color(KEY));
-            }
-            update::Status::Checking => {
-                ui.spinner();
-                ui.label(RichText::new("Checking…").small().color(KEY));
-            }
-            update::Status::UpToDate => {
-                ui.label(RichText::new("Up to date.").small().color(GOOD));
-            }
-            update::Status::Newer(r) => {
-                let r = r.clone();
-                ui.label(
-                    RichText::new(format!("{} available.", r.version))
-                        .small()
-                        .color(ACCENT),
+            ui.horizontal(|ui| {
+                ui.label(RichText::new("Source").small().color(KEY));
+                ui.hyperlink_to(
+                    RichText::new("github.com/frdcmp/auriscope").monospace(),
+                    update::REPO_URL,
                 );
-                ui.hyperlink_to(RichText::new("Release page").small(), &r.url);
-                let skipped = app.settings.update_skipped.as_deref() == Some(r.version.as_str());
-                let label = if skipped { "Remind me" } else { "Skip" };
-                if ui.small_button(label).clicked() {
-                    app.settings.update_skipped = (!skipped).then(|| r.version.clone());
-                }
-            }
-            update::Status::Failed(e) => {
+            });
+            ui.add_space(4.0);
+            if !update::ENABLED {
                 ui.label(
-                    RichText::new(format!("Check failed: {e}"))
+                    RichText::new("Updates come through your package manager.")
                         .small()
                         .color(KEY),
+                );
+                return;
+            }
+            ui.horizontal(|ui| {
+                ui.checkbox(
+                    &mut app.settings.check_updates,
+                    "Check for updates on startup",
                 )
                 .on_hover_text(
-                    "Offline, or GitHub declined the request. Nothing else is affected.",
+                    "Asks api.github.com for the latest release, at most once a day. \
+                     Nothing is downloaded and nothing about you is sent.",
                 );
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    let checking = app.updater.status == update::Status::Checking;
+                    if ui
+                        .add_enabled(!checking, egui::Button::new("Check now"))
+                        .clicked()
+                    {
+                        app.updater.start();
+                    }
+                });
+            });
+            ui.horizontal(|ui| match &app.updater.status {
+                update::Status::Idle => {
+                    ui.label(RichText::new("Not checked yet.").small().color(KEY));
+                }
+                update::Status::Checking => {
+                    ui.spinner();
+                    ui.label(RichText::new("Checking…").small().color(KEY));
+                }
+                update::Status::UpToDate => {
+                    ui.label(RichText::new("Up to date.").small().color(GOOD));
+                }
+                update::Status::Newer(r) => {
+                    let r = r.clone();
+                    ui.label(
+                        RichText::new(format!("{} available.", r.version))
+                            .small()
+                            .color(ACCENT),
+                    );
+                    ui.hyperlink_to(RichText::new("Release page").small(), &r.url);
+                    let skipped =
+                        app.settings.update_skipped.as_deref() == Some(r.version.as_str());
+                    let label = if skipped { "Remind me" } else { "Skip" };
+                    if ui.small_button(label).clicked() {
+                        app.settings.update_skipped = (!skipped).then(|| r.version.clone());
+                    }
+                }
+                update::Status::Failed(e) => {
+                    ui.label(
+                        RichText::new(format!("Check failed: {e}"))
+                            .small()
+                            .color(KEY),
+                    )
+                    .on_hover_text(
+                        "Offline, or GitHub declined the request. Nothing else is affected.",
+                    );
+                }
+            });
+        },
+    );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn kv_columns_are_equal_fractions_of_the_card() {
+        // What the geometry does with the count: with one pair a line the value
+        // column starts at half the card, with two pairs at each quarter.
+        let avail = 400.0;
+        for pairs in 1..=KV_MAX_PAIRS {
+            let col_w = avail / (2 * pairs) as f32;
+            for pair in 0..pairs {
+                let key_x = (2 * pair) as f32 * col_w;
+                let val_x = key_x + col_w;
+                let frac = |x: f32| x / avail;
+                assert_eq!(frac(key_x), (2 * pair) as f32 / (2 * pairs) as f32);
+                assert_eq!(frac(val_x), (2 * pair + 1) as f32 / (2 * pairs) as f32);
             }
-        });
-    });
+        }
+        // Spelled out for the two the sidebar actually uses: one pair means a
+        // 200-wide key column then the value at 200, two means columns of 100.
+        assert_eq!(400.0 / 2.0, 200.0);
+        assert_eq!(400.0 / 4.0, 100.0);
+    }
+
+    #[test]
+    fn kv_takes_a_second_pair_only_when_all_four_columns_fit() {
+        // Columns of 90: four need 360, so 400 holds two pairs and 340 holds one.
+        assert_eq!(kv_pairs_per_line(8, 90.0, 400.0), 2);
+        assert_eq!(kv_pairs_per_line(8, 90.0, 340.0), 1);
+        // A wide value forces one pair however wide the card.
+        assert_eq!(kv_pairs_per_line(8, 210.0, 400.0), 1);
+        // Never wider than the rows can fill, two to a pair-column.
+        assert_eq!(kv_pairs_per_line(3, 60.0, 400.0), 1);
+        assert_eq!(kv_pairs_per_line(4, 60.0, 400.0), 2);
+        // And never past the cap, however much room there is.
+        assert_eq!(kv_pairs_per_line(40, 20.0, 2000.0), KV_MAX_PAIRS);
+    }
+
+    #[test]
+    fn kv_columns_hold_the_widest_key_and_value_uncut() {
+        // The fit test is what guarantees no truncation: whenever it takes a
+        // pair, every column clears the widest key and the widest value.
+        let (key_w, val_w) = (70.0, 110.0);
+        let need = kv_col_need(key_w, val_w);
+        let avail = 440.0;
+        let pairs = kv_pairs_per_line(8, need, avail);
+        assert_eq!(pairs, 1);
+        let col_w = avail / (2 * pairs) as f32;
+        assert!(col_w - KV_GAP >= key_w);
+        assert!(col_w - KV_COL_GAP >= val_w);
+    }
 }
