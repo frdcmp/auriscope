@@ -700,7 +700,15 @@ const CARD_HEAD_BG: Color32 = Color32::from_rgb(38, 40, 45);
 const CARD_HEAD_RULE: Color32 = Color32::from_rgb(52, 54, 60);
 
 const CARD_PAD: Margin = Margin::symmetric(10, 8);
-const CARD_PAD_WIDE: Margin = Margin::symmetric(14, 12);
+/// Asymmetric on purpose: the header band takes its height from the top pad,
+/// so a smaller one there keeps the band compact while the card keeps its
+/// roomier bottom.
+const CARD_PAD_WIDE: Margin = Margin {
+    left: 14,
+    right: 14,
+    top: 8,
+    bottom: 12,
+};
 
 /// A titled card: icon, title, optional right-aligned note, then the body.
 ///
@@ -793,7 +801,9 @@ fn card_with(
                 strip.bottom() - 0.5,
                 Stroke::new(1.0, CARD_HEAD_RULE),
             );
-            ui.add_space(if roomy { 12.0 } else { 9.0 });
+            // Clear of the rule by about the card's own bottom padding, so the
+            // first row is not pinned under the header band.
+            ui.add_space(if roomy { 14.0 } else { 12.0 });
             body(ui);
         });
 }
@@ -1723,6 +1733,18 @@ fn cursor_card(app: &App, ui: &mut egui::Ui) {
     );
 }
 
+/// A key drawn as a little keycap, for the hints that sit beside a control.
+fn keycap(ui: &mut egui::Ui, key: &str) {
+    egui::Frame::new()
+        .fill(CARD_HEAD_BG)
+        .stroke(Stroke::new(1.0, CARD_HEAD_RULE))
+        .corner_radius(3.0)
+        .inner_margin(Margin::symmetric(5, 1))
+        .show(ui, |ui| {
+            ui.label(RichText::new(key).monospace().size(fonts::SMALL).color(VAL));
+        });
+}
+
 /// The settings dialog: what to show, and every control for the three views.
 pub fn settings_window(app: &mut App, ctx: &egui::Context) {
     if !app.settings_open {
@@ -1752,10 +1774,19 @@ pub fn settings_window(app: &mut App, ctx: &egui::Context) {
                         .color(Color32::from_gray(235)),
                 );
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    if ui.button("Close").clicked() {
+                    if ui
+                        .button("Close")
+                        .on_hover_text("Close settings — Esc")
+                        .clicked()
+                    {
                         app.settings_open = false;
                     }
-                    ui.label(RichText::new("Ctrl+,  ·  Esc").small().color(KEY));
+                    // Esc alone: spelled out as "<key> to close" so the hint
+                    // cannot be mistaken for a view shortcut. Ctrl+, opens the
+                    // dialog too, but it lives in the Keys card, not here.
+                    ui.add_space(4.0);
+                    ui.label(RichText::new("to close").small().color(KEY));
+                    keycap(ui, "Esc");
                 });
             });
             let max_h = (ctx.viewport_rect().height() * 0.85 - 80.0).max(300.0);
@@ -1763,6 +1794,7 @@ pub fn settings_window(app: &mut App, ctx: &egui::Context) {
             let mut area = egui::ScrollArea::vertical()
                 .max_height(max_h)
                 .min_scrolled_height(want_h)
+                .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden)
                 .auto_shrink([false, true]);
             if app.settings_content_h == 0.0 {
                 // Freshly opened: start at the top whatever egui remembers.
@@ -2286,7 +2318,7 @@ fn files_card(app: &mut App, ui: &mut egui::Ui) {
 
 fn keys_card(ui: &mut egui::Ui) {
     wide_card(ui, fonts::icon::INFO, "Keys", Topic::KeysCard, None, |ui| {
-        const KEYS: [(&str, &str); 17] = [
+        const KEYS: [(&str, &str); 18] = [
             ("Space", "play / pause"),
             ("Ctrl+O", "open a file"),
             ("Ctrl+,", "settings"),
@@ -2298,9 +2330,10 @@ fn keys_card(ui: &mut egui::Ui) {
             ("L", "loop the range"),
             ("Esc", "clear highlight, then range"),
             ("F / Shift+F", "zoom to range / fit file"),
+            ("+ / −", "zoom in / out"),
             ("← → / Shift", "±5 s / ±1 s · Home, End"),
             ("Wheel", "zoom at pointer · Shift: pan"),
-            ("Ctrl+wheel, pinch", "zoom · + / −"),
+            ("Ctrl+wheel, pinch", "zoom in / out"),
             ("Alt+Shift+wheel", "waveform vertical zoom"),
             ("Middle-drag", "scroll the clip"),
             ("Divider", "drag to resize the strips"),
