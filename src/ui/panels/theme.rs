@@ -8,6 +8,9 @@
 use eframe::egui;
 use egui::Color32;
 
+/// The side panel's own background, a shade below the cards it holds.
+pub const SIDE_BG: Color32 = Color32::from_rgb(22, 23, 26);
+
 /// The card a panel's contents sit on, and the accent that marks anything
 /// interactive or worth the eye landing on.
 pub const CARD_BG: Color32 = Color32::from_rgb(31, 32, 36);
