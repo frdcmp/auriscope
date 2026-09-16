@@ -551,7 +551,9 @@ fn draw_waveform(app: &App, p: &egui::Painter, rect: Rect, overlay: Option<f32>)
         return;
     };
     let nch = audio.channels.len();
-    let ch_h = rect.height() / nch as f32;
+    // An isolated channel is the only row, so it gets the whole height.
+    let chans = app.visible_channels(nch);
+    let ch_h = rect.height() / chans.len() as f32;
     let width = rect.width().max(1.0) as usize;
     let show_rms = app.settings.show_rms;
     let vz = app.settings.wave_v_zoom;
@@ -561,8 +563,8 @@ fn draw_waveform(app: &App, p: &egui::Painter, rect: Rect, overlay: Option<f32>)
     let spp = app.view.len() / width.max(1) as f64;
     let per_sample = spp <= 4.0;
 
-    for ch in 0..nch {
-        let top = rect.top() + ch_h * ch as f32;
+    for (row, ch) in chans.clone().enumerate() {
+        let top = rect.top() + ch_h * row as f32;
         let mid = top + ch_h / 2.0;
         let half = ch_h / 2.0 - 2.0;
         // The zero line (-inf dBFS). Under the envelope, where it only has
@@ -577,7 +579,7 @@ fn draw_waveform(app: &App, p: &egui::Painter, rect: Rect, overlay: Option<f32>)
         if !per_sample {
             p.hline(rect.x_range(), mid, Stroke::new(1.0, zero_c));
         }
-        if !over && ch > 0 {
+        if !over && row > 0 {
             p.hline(
                 rect.x_range(),
                 top,
@@ -883,7 +885,8 @@ fn draw_spectrogram(app: &mut App, ui: &egui::Ui, p: &egui::Painter, rect: Rect)
         return;
     };
     let nch = audio.channels.len();
-    let ch_h = rect.height() / nch as f32;
+    let chans = app.visible_channels(nch);
+    let ch_h = rect.height() / chans.len() as f32;
     let lut = app
         .settings
         .colormap
@@ -899,9 +902,9 @@ fn draw_spectrogram(app: &mut App, ui: &egui::Ui, p: &egui::Painter, rect: Rect)
     // Ask for high-resolution tiles if the zoom has outrun the base hop.
     app.request_detail((rect.width() * ppp).round() as usize);
 
-    for ch in 0..nch {
+    for (row, ch) in chans.clone().enumerate() {
         let crect = Rect::from_min_size(
-            pos2(rect.left(), rect.top() + ch_h * ch as f32),
+            pos2(rect.left(), rect.top() + ch_h * row as f32),
             vec2(rect.width(), ch_h),
         );
         // A muted channel is dimmed the way its waveform is: the image fades
@@ -999,7 +1002,7 @@ fn draw_spectrogram(app: &mut App, ui: &egui::Ui, p: &egui::Painter, rect: Rect)
             draw_remapped(p, tex, k, &key, crect, spec_tint);
         }
         draw_freq_axis(app, p, crect, spec.nyquist(), nch > 1);
-        if ch > 0 {
+        if row > 0 {
             p.hline(
                 rect.x_range(),
                 crect.top(),
@@ -1094,10 +1097,12 @@ fn spectrogram_hover(app: &mut App, pos: Pos2, rect: Rect) {
         return;
     };
     let nch = audio.channels.len();
-    let ch_h = rect.height() / nch as f32;
-    let ch = (((pos.y - rect.top()) / ch_h) as usize).min(nch - 1);
+    let chans = app.visible_channels(nch);
+    let ch_h = rect.height() / chans.len() as f32;
+    let row = (((pos.y - rect.top()) / ch_h) as usize).min(chans.len() - 1);
+    let ch = chans.start + row;
     let crect = Rect::from_min_size(
-        pos2(rect.left(), rect.top() + ch_h * ch as f32),
+        pos2(rect.left(), rect.top() + ch_h * row as f32),
         vec2(rect.width(), ch_h),
     );
     let frame = x_to_frame(&app.view, rect, pos.x);

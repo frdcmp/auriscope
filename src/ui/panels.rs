@@ -1262,8 +1262,14 @@ fn lufs_str(v: f32) -> String {
     }
 }
 
-/// Horizontal level bar on a −60…0 dB scale with a value readout.
-fn level_bar(ui: &mut egui::Ui, label: &str, db: f32, color: Color32, topic: Topic) {
+/// Horizontal level bar on a −60…0 dB scale with a value readout. `dim` is
+/// for a channel that is not being heard: bar, label and number all go grey.
+fn level_bar(ui: &mut egui::Ui, label: &str, db: f32, color: Color32, topic: Topic, dim: bool) {
+    let (color, key, val) = if dim {
+        (dull(color), dull(KEY), dull(VAL))
+    } else {
+        (color, KEY, VAL)
+    };
     let h = 15.0;
     let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), h), Sense::hover());
     let p = ui.painter();
@@ -1273,7 +1279,7 @@ fn level_bar(ui: &mut egui::Ui, label: &str, db: f32, color: Color32, topic: Top
         pos2(rect.left() + label_w, rect.top() + 3.0),
         pos2(rect.right() - val_w, rect.bottom() - 3.0),
     );
-    p.rect_filled(bar, 2.0, Color32::from_gray(44));
+    p.rect_filled(bar, 2.0, Color32::from_gray(if dim { 36 } else { 44 }));
     let t = ((db + 60.0) / 60.0).clamp(0.0, 1.0);
     if t > 0.0 {
         let fill = Rect::from_min_max(bar.min, pos2(bar.left() + bar.width() * t, bar.bottom()));
@@ -1292,7 +1298,7 @@ fn level_bar(ui: &mut egui::Ui, label: &str, db: f32, color: Color32, topic: Top
         Align2::LEFT_CENTER,
         label,
         FontId::new(fonts::SMALL, egui::FontFamily::Proportional),
-        KEY,
+        key,
     );
     help::offer(ui, label_at, rect, topic);
     p.text(
@@ -1304,8 +1310,18 @@ fn level_bar(ui: &mut egui::Ui, label: &str, db: f32, color: Color32, topic: Top
             "—".into()
         },
         FontId::monospace(fonts::SMALL),
-        VAL,
+        val,
     );
+}
+
+/// Pull a colour to grey and darken it: how a channel's readouts are drawn
+/// when that channel is not being heard — muted, soloed out, or left behind
+/// by another channel picked out on its own. Dull rather than hidden, because
+/// the numbers are still true, they are just not what is playing.
+fn dull(c: Color32) -> Color32 {
+    let lum = c.r() as f32 * 0.30 + c.g() as f32 * 0.59 + c.b() as f32 * 0.11;
+    let v = (lum * 0.55) as u8;
+    Color32::from_gray(v)
 }
 
 fn peak_color(dbtp: f32) -> Color32 {
@@ -1675,11 +1691,27 @@ fn loudness_card(app: &App, ui: &mut egui::Ui) {
 /// colour of the function while on.
 const MUTE_LIT: Color32 = Color32::from_rgb(214, 74, 74);
 const SOLO_LIT: Color32 = Color32::from_rgb(235, 186, 62);
+/// The pill behind a channel name that is being drawn on its own: the accent
+/// at a wash, so the name still reads as a name and not as a third button.
+const ISOLATE_BG: Color32 = Color32::from_rgba_premultiplied(24, 43, 59, 70);
+/// Hover feedback on anything that paints its own background.
+const HOVER_WASH: Color32 = Color32::from_rgba_premultiplied(16, 16, 16, 16);
 
-/// A latching mixer button. Returns true on the click that toggles it.
-fn mixer_button(ui: &mut egui::Ui, on: bool, text: &str, lit: Color32, tip: &str) -> bool {
+/// A latching mixer button. `dim` greys an unlit one, for a channel that is
+/// not being heard; a lit one keeps its colour, since it is often the reason
+/// the channel is not being heard. Returns true on the click that toggles it.
+fn mixer_button(
+    ui: &mut egui::Ui,
+    on: bool,
+    dim: bool,
+    text: &str,
+    lit: Color32,
+    tip: &str,
+) -> bool {
     let (fill, fg, stroke) = if on {
         (lit, Color32::from_gray(20), Stroke::new(1.0, lit))
+    } else if dim {
+        (CARD_BG, dull(KEY), Stroke::new(1.0, Color32::from_gray(48)))
     } else {
         (CARD_HEAD_BG, KEY, Stroke::new(1.0, CARD_HEAD_RULE))
     };
@@ -1701,8 +1733,7 @@ fn mixer_button(ui: &mut egui::Ui, on: bool, text: &str, lit: Color32, tip: &str
     // An explicit fill overrides egui's own hover shading, so the feedback is
     // painted back on top.
     if resp.hovered() {
-        ui.painter()
-            .rect_filled(resp.rect, 4.0, Color32::from_white_alpha(16));
+        ui.painter().rect_filled(resp.rect, 4.0, HOVER_WASH);
     }
     resp.clicked()
 }
@@ -1731,26 +1762,72 @@ fn levels_card(app: &mut App, ui: &mut egui::Ui) {
                 if ch > 0 {
                     ui.add_space(4.0);
                 }
+                // Everything about a channel nobody is hearing is drawn back,
+                // so the strip that is playing is the one the eye lands on.
+                let dim = app.channel_muted(ch);
                 ui.horizontal(|ui| {
                     // The channel's name, then its two controls spelled out:
                     // "L M S" over an RMS row read as one more abbreviation.
-                    ui.label(
-                        RichText::new(channel_name(ch, nch))
+                    // The name is itself a control: click it to draw that
+                    // channel alone. Its pill is painted once the text has
+                    // been laid out, so it lands behind rather than over it.
+                    let name = channel_name(ch, nch);
+                    let alone = app.isolated == Some(ch);
+                    let pill = ui.painter().add(Shape::Noop);
+                    let mut label = egui::Label::new(
+                        RichText::new(&name)
                             .family(fonts::bold())
                             .size(fonts::BODY)
-                            .color(ACCENT),
+                            .color(if dim { dull(ACCENT) } else { ACCENT }),
                     );
                     if nch > 1 {
+                        label = label.sense(Sense::click());
+                    }
+                    let resp = ui.add(label);
+                    if nch > 1 {
+                        let resp = resp
+                            .on_hover_cursor(egui::CursorIcon::PointingHand)
+                            .on_hover_text(if alone {
+                                "Back to every channel".to_string()
+                            } else {
+                                format!("{name} alone, as if it were a mono file")
+                            });
+                        help::offer_response(ui, &resp, Topic::ChannelIsolate);
+                        if resp.clicked() {
+                            app.isolated = if alone { None } else { Some(ch) };
+                            // Two ways of asking to hear one channel; holding
+                            // both at once would only be a way to disagree.
+                            app.solo = None;
+                            changed = true;
+                        }
+                        if alone || resp.hovered() {
+                            ui.painter().set(
+                                pill,
+                                Shape::rect_filled(
+                                    resp.rect.expand2(vec2(5.0, 2.0)),
+                                    4.0,
+                                    if alone { ISOLATE_BG } else { HOVER_WASH },
+                                ),
+                            );
+                        }
                         ui.add_space(4.0);
                         ui.spacing_mut().item_spacing.x = 4.0;
                         let muted = app.mutes[ch];
-                        if mixer_button(ui, muted, "Mute", MUTE_LIT, "Silence this channel") {
+                        if mixer_button(ui, muted, dim, "Mute", MUTE_LIT, "Silence this channel") {
                             app.mutes[ch] = !muted;
                             changed = true;
                         }
                         let soloed = app.solo == Some(ch);
-                        if mixer_button(ui, soloed, "Solo", SOLO_LIT, "Hear this channel alone") {
+                        if mixer_button(
+                            ui,
+                            soloed,
+                            dim,
+                            "Solo",
+                            SOLO_LIT,
+                            "Hear this channel alone, in its own speaker",
+                        ) {
                             app.solo = if soloed { None } else { Some(ch) };
+                            app.isolated = None;
                             changed = true;
                         }
                     }
@@ -1764,30 +1841,36 @@ fn levels_card(app: &mut App, ui: &mut egui::Ui) {
                                     cs.clipped_runs
                                 ))
                                 .small()
-                                .color(BAD),
+                                .color(if dim {
+                                    dull(BAD)
+                                } else {
+                                    BAD
+                                }),
                             )
                         } else {
-                            ui.label(RichText::new("no clipping").small().color(KEY))
+                            let c = if dim { dull(KEY) } else { KEY };
+                            ui.label(RichText::new("no clipping").small().color(c))
                         };
                         help::offer_response(ui, &note, Topic::Clipping);
                     });
                 });
                 let peak = peak_color(cs.true_peak_dbtp);
-                level_bar(ui, "Peak", cs.sample_peak_db, peak, Topic::PeakLevel);
-                level_bar(ui, "TP", cs.true_peak_dbtp, peak, Topic::TruePeakLevel);
+                level_bar(ui, "Peak", cs.sample_peak_db, peak, Topic::PeakLevel, dim);
+                level_bar(ui, "TP", cs.true_peak_dbtp, peak, Topic::TruePeakLevel, dim);
                 let rms = Color32::from_rgb(96, 118, 172);
-                level_bar(ui, "RMS", cs.rms_db, rms, Topic::RmsLevel);
+                level_bar(ui, "RMS", cs.rms_db, rms, Topic::RmsLevel, dim);
+                let dc_c = if cs.dc_offset.abs() > 0.01 { WARN } else { KEY };
                 let dc = ui.label(
                     RichText::new(format!("DC offset {:+.4}", cs.dc_offset))
                         .small()
-                        .color(if cs.dc_offset.abs() > 0.01 { WARN } else { KEY }),
+                        .color(if dim { dull(dc_c) } else { dc_c }),
                 );
                 help::offer_response(ui, &dc, Topic::DcOffset);
             }
         },
     );
     if changed {
-        app.apply_mutes();
+        app.apply_channel_routing();
     }
 }
 

@@ -48,6 +48,10 @@ struct Chunk {
     data: [f32; CHUNK_FRAMES * MAX_OUT_CHANNELS],
 }
 
+/// `mono_source` when no channel has been picked out. Out of range of any
+/// channel count, so the feeder needs no separate flag.
+const NO_MONO: u32 = u32::MAX;
+
 /// State shared between UI, feeder and callback. Atomics only.
 pub struct Shared {
     pub playing: AtomicBool,
@@ -58,6 +62,10 @@ pub struct Shared {
     pan_bits: AtomicU32,
     /// Bit `n` set = file channel `n` muted.
     pub mute_mask: AtomicU32,
+    /// The one file channel fed to every output channel, if the user has
+    /// picked one out: that channel is then played the way a mono file is,
+    /// centred rather than stuck in its own speaker. [`NO_MONO`] when off.
+    mono_source: AtomicU32,
     pub loop_enabled: AtomicBool,
     pub loop_start: AtomicU64,
     pub loop_end: AtomicU64,
@@ -82,6 +90,7 @@ impl Shared {
             gain_bits: AtomicU32::new(1.0f32.to_bits()),
             pan_bits: AtomicU32::new(0.0f32.to_bits()),
             mute_mask: AtomicU32::new(0),
+            mono_source: AtomicU32::new(NO_MONO),
             loop_enabled: AtomicBool::new(false),
             loop_start: AtomicU64::new(0),
             loop_end: AtomicU64::new(0),
@@ -127,6 +136,18 @@ impl Shared {
         let l = f32::from_bits(self.out_peak[0].swap(0, Ordering::Relaxed));
         let r = f32::from_bits(self.out_peak[1].swap(0, Ordering::Relaxed));
         (l, r)
+    }
+
+    pub fn mono_source(&self) -> Option<usize> {
+        match self.mono_source.load(Ordering::Relaxed) {
+            NO_MONO => None,
+            c => Some(c as usize),
+        }
+    }
+
+    pub fn set_mono_source(&self, ch: Option<usize>) {
+        self.mono_source
+            .store(ch.map_or(NO_MONO, |c| c as u32), Ordering::Relaxed);
     }
 
     pub fn set_loop(&self, region: Option<(u64, u64)>) {
@@ -664,7 +685,13 @@ impl Feeder {
         } else {
             &self.in_bufs
         };
-        map_channels(planar, frames, self.dch, &mut chunk.data);
+        map_channels(
+            planar,
+            frames,
+            self.dch,
+            self.shared.mono_source(),
+            &mut chunk.data,
+        );
         self.pos += advance;
         // Slot availability was checked by the caller; a failure here only
         // means the callback raced us, and the chunk is simply retried.
@@ -675,9 +702,20 @@ impl Feeder {
 }
 
 /// Planar file channels -> interleaved device channels.
-fn map_channels(src: &[Vec<f32>], frames: usize, dch: usize, dst: &mut [f32]) {
+///
+/// `mono` is a single file channel to play on its own: it goes to every
+/// output channel, so picking out one side of a stereo file sounds like the
+/// same material imported as a mono file, not like a recording with one dead
+/// speaker.
+fn map_channels(src: &[Vec<f32>], frames: usize, dch: usize, mono: Option<usize>, dst: &mut [f32]) {
     let nch = src.len();
     if nch == 0 {
+        return;
+    }
+    if let Some(c) = mono.filter(|&c| c < nch) {
+        for f in 0..frames {
+            dst[f * dch..(f + 1) * dch].fill(src[c][f]);
+        }
         return;
     }
     for f in 0..frames {
@@ -708,20 +746,30 @@ mod tests {
         let r = vec![10.0, 20.0];
         let mut out = vec![0.0; 8];
 
-        map_channels(&[l.clone(), r.clone()], 2, 2, &mut out);
+        map_channels(&[l.clone(), r.clone()], 2, 2, None, &mut out);
         assert_eq!(&out[..4], &[1.0, 10.0, 2.0, 20.0]);
 
         out.fill(0.0);
-        map_channels(std::slice::from_ref(&l), 2, 2, &mut out);
+        map_channels(std::slice::from_ref(&l), 2, 2, None, &mut out);
         assert_eq!(&out[..4], &[1.0, 1.0, 2.0, 2.0]);
 
         out.fill(0.0);
-        map_channels(&[l.clone(), r.clone()], 2, 1, &mut out);
+        map_channels(&[l.clone(), r.clone()], 2, 1, None, &mut out);
         assert_eq!(&out[..2], &[5.5, 11.0]);
 
         out.fill(0.0);
-        map_channels(&[l, r], 2, 4, &mut out);
+        map_channels(&[l.clone(), r.clone()], 2, 4, None, &mut out);
         assert_eq!(&out[..8], &[1.0, 10.0, 0.0, 0.0, 2.0, 20.0, 0.0, 0.0]);
+
+        // One channel picked out: it goes to every speaker, at its own level.
+        out.fill(0.0);
+        map_channels(&[l.clone(), r.clone()], 2, 2, Some(1), &mut out);
+        assert_eq!(&out[..4], &[10.0, 10.0, 20.0, 20.0]);
+
+        // A source that does not exist is ignored rather than silencing.
+        out.fill(0.0);
+        map_channels(&[l, r], 2, 2, Some(7), &mut out);
+        assert_eq!(&out[..4], &[1.0, 10.0, 2.0, 20.0]);
     }
 
     #[test]

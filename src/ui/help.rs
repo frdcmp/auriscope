@@ -223,6 +223,7 @@ pub enum Topic {
     CrestFactor,
 
     // ---- levels --------------------------------------------------------
+    ChannelIsolate,
     PeakLevel,
     TruePeakLevel,
     RmsLevel,
@@ -543,6 +544,14 @@ impl Topic {
             ),
 
             // ---- levels ------------------------------------------------
+            T::ChannelIsolate => (
+                "Channel name",
+                "Click it to pick this channel out: it gets the whole height to itself in the \
+                 waveform and the spectrogram, and it plays on its own out of both speakers — \
+                 exactly what you would see and hear had you imported this channel as a mono \
+                 file. Click it again to bring the others back. Solo hears one channel too, but \
+                 leaves it where it is, in its own speaker.",
+            ),
             T::PeakLevel => (
                 "Peak",
                 "The largest single sample in the channel, in dBFS. It is what a conventional \
@@ -910,6 +919,7 @@ mod tests {
         Topic::TargetDelta,
         Topic::Headroom,
         Topic::CrestFactor,
+        Topic::ChannelIsolate,
         Topic::PeakLevel,
         Topic::TruePeakLevel,
         Topic::RmsLevel,

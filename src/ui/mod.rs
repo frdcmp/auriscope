@@ -256,6 +256,12 @@ pub struct App {
     loop_enabled: bool,
     mutes: Vec<bool>,
     solo: Option<usize>,
+    /// The one channel picked out by clicking its name in Levels: the file is
+    /// then shown and played the way a mono file of that channel would be —
+    /// drawn full height, heard on its own out of both speakers rather than
+    /// stuck in its own one. Mutually exclusive with `solo`, which hears a
+    /// channel in place.
+    isolated: Option<usize>,
     error: Option<String>,
     hover_info: String,
     /// Whether the settings dialog is open.
@@ -345,6 +351,7 @@ impl App {
             loop_enabled: false,
             mutes: Vec::new(),
             solo: None,
+            isolated: None,
             error: None,
             hover_info: String::new(),
             settings_open: false,
@@ -592,6 +599,7 @@ impl App {
                     self.spec_render = (0..audio.channels.len()).map(|_| None).collect();
                     self.mutes = vec![false; audio.channels.len()];
                     self.solo = None;
+                    self.isolated = None;
                     match Engine::new(audio.clone()) {
                         Ok(engine) => {
                             engine
@@ -677,17 +685,29 @@ impl App {
         }
     }
 
+    /// The channels the views lay out, in order. Normally every one; while a
+    /// channel is isolated, just that one, so it gets the whole height.
+    pub fn visible_channels(&self, nch: usize) -> std::ops::Range<usize> {
+        match self.isolated {
+            Some(c) if c < nch => c..c + 1,
+            _ => 0..nch,
+        }
+    }
+
     /// Whether a channel is silent right now: explicitly muted, or left out
-    /// by a solo elsewhere. The views dim what this returns true for, so the
-    /// picture says the same thing as the sound.
+    /// by a channel picked out elsewhere. The views dim what this returns
+    /// true for, so the picture says the same thing as the sound. Isolating
+    /// or soloing wins over a mute, the way a mixer's solo does.
     pub fn channel_muted(&self, ch: usize) -> bool {
-        match self.solo {
+        match self.isolated.or(self.solo) {
             Some(s) => s != ch,
             None => self.mutes.get(ch).copied().unwrap_or(false),
         }
     }
 
-    fn apply_mutes(&self) {
+    /// Push the channel routing to the engine: what is silent, and whether
+    /// one channel is being played on its own to every speaker.
+    fn apply_channel_routing(&self) {
         let Some(engine) = &self.engine else {
             return;
         };
@@ -698,6 +718,7 @@ impl App {
             }
         }
         engine.shared.mute_mask.store(mask, Ordering::Relaxed);
+        engine.shared.set_mono_source(self.isolated);
     }
 
     fn zoom_to_fit(&mut self) {
