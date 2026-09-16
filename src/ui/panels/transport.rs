@@ -83,8 +83,12 @@ pub fn top_bar(app: &mut App, root: &mut egui::Ui) {
                 app.loop_enabled = loop_on;
                 app.apply_loop();
             }
-            if let Some((a, b)) = app.range {
-                let (a, b) = (a / sr, b / sr);
+            // Mid-drag the ruler range is still the old one: the range only
+            // lands when the button comes up. The live selection is what the
+            // pointer is describing, so the readout follows that and counts up
+            // as the drag is drawn. Ordered, because a drag can run backwards.
+            if let Some((a, b)) = app.selection.or(app.range) {
+                let (a, b) = (a.min(b) / sr, a.max(b) / sr);
                 ui.label(
                     RichText::new(format!(
                         "{} – {}  ({})",

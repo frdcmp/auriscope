@@ -16,7 +16,7 @@ use crate::ui::views::{V_ZOOM_MAX, V_ZOOM_MIN};
 use crate::ui::{App, RECENT_MAX, fonts, update};
 
 use super::theme::{ACCENT, GOOD, KEY, SIDE_BG, VAL, WARN};
-use super::widgets::{CARD_HEAD_BG, CARD_HEAD_RULE, kv, kv_colored, kv_rows, mono, wide_card};
+use super::widgets::{CARD_HEAD_BG, CARD_HEAD_RULE, mono, wide_card};
 
 /// A key drawn as a little keycap, for the hints that sit beside a control.
 fn keycap(ui: &mut egui::Ui, key: &str) {
@@ -169,6 +169,36 @@ fn palette_strip(ui: &mut egui::Ui, lut: &[Color32]) {
         Stroke::new(1.0, Color32::from_gray(70)),
         egui::StrokeKind::Outside,
     );
+}
+
+/// The wash under an accent button, and what hovering and pressing it brighten
+/// that wash to. A wash rather than a solid fill: the button carries the card's
+/// one action without shouting over the rows it sits among.
+const ACT_BG: Color32 = Color32::from_rgb(38, 52, 66);
+const ACT_BG_HOVER: Color32 = Color32::from_rgb(49, 69, 89);
+const ACT_BG_ACTIVE: Color32 = Color32::from_rgb(60, 86, 112);
+
+/// A button for the one action a card is about: accent text on an accent wash.
+///
+/// The states are set on the style rather than with `Button::fill`, which
+/// overrides every state at once and would leave the button dead under the
+/// pointer. Disabled is left alone: egui fades it toward the card, which reads
+/// as unavailable already.
+fn action_button(ui: &mut egui::Ui, enabled: bool, text: &str) -> egui::Response {
+    ui.scope(|ui| {
+        let w = &mut ui.style_mut().visuals.widgets;
+        w.inactive.weak_bg_fill = ACT_BG;
+        w.inactive.bg_stroke = Stroke::new(1.0, ACCENT.gamma_multiply(0.5));
+        w.hovered.weak_bg_fill = ACT_BG_HOVER;
+        w.hovered.bg_stroke = Stroke::new(1.0, ACCENT);
+        w.active.weak_bg_fill = ACT_BG_ACTIVE;
+        w.active.bg_stroke = Stroke::new(1.0, ACCENT);
+        ui.add_enabled(
+            enabled,
+            egui::Button::new(RichText::new(text).color(ACCENT)),
+        )
+    })
+    .inner
 }
 
 fn combo(id: &str) -> egui::ComboBox {
@@ -632,83 +662,83 @@ fn about_card(app: &mut App, ui: &mut egui::Ui) {
         Topic::AboutCard,
         None,
         |ui| {
-            kv_rows(ui, |rows| {
-                kv(rows, "Version", update::CURRENT);
+            // The same label grid as the cards above, so the versions, the
+            // setting and the check all start at the one column the rest of the
+            // dialog uses.
+            settings_grid(ui, "about-grid", |ui| {
+                setting(ui, "Version", None, |ui| {
+                    ui.label(mono(update::CURRENT));
+                });
                 if update::is_dev_build() {
-                    kv_colored(rows, "Build", update::GIT_DESCRIBE, ACCENT);
+                    setting(ui, "Build", None, |ui| {
+                        ui.label(mono(update::GIT_DESCRIBE).color(ACCENT));
+                    });
                 }
-            });
-            ui.horizontal(|ui| {
-                ui.label(RichText::new("Source").small().color(KEY));
-                ui.hyperlink_to(
-                    RichText::new("github.com/frdcmp/auriscope").monospace(),
-                    update::REPO_URL,
-                );
-            });
-            ui.add_space(4.0);
-            if !update::ENABLED {
-                ui.label(
-                    RichText::new("Updates come through your package manager.")
-                        .small()
-                        .color(KEY),
-                );
-                return;
-            }
-            ui.horizontal(|ui| {
-                ui.checkbox(
-                    &mut app.settings.check_updates,
-                    "Check for updates on startup",
-                )
-                .on_hover_text(
-                    "Asks api.github.com for the latest release, at most once a day. \
-                     Nothing is downloaded and nothing about you is sent.",
-                );
-                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    let checking = app.updater.status == update::Status::Checking;
-                    if ui
-                        .add_enabled(!checking, egui::Button::new("Check now"))
-                        .clicked()
-                    {
-                        app.updater.start();
+                setting(ui, "Source", None, |ui| {
+                    ui.hyperlink_to(
+                        RichText::new("github.com/frdcmp/auriscope").monospace(),
+                        update::REPO_URL,
+                    );
+                });
+                if !update::ENABLED {
+                    setting(ui, "Updates", None, |ui| {
+                        ui.label(RichText::new("Your package manager handles them.").color(KEY));
+                    });
+                    return;
+                }
+                setting(ui, "Updates", None, |ui| {
+                    ui.checkbox(&mut app.settings.check_updates, "Check on startup")
+                        .on_hover_text(
+                            "Asks api.github.com for the latest release, at most once a day. \
+                             Nothing is downloaded and nothing about you is sent.",
+                        );
+                });
+                // The button takes the label column and what the check said
+                // takes the value column, so the two read as one row like the
+                // rows above rather than as a block of their own.
+                let checking = app.updater.status == update::Status::Checking;
+                if action_button(ui, !checking, "Check now")
+                    .on_hover_text("Asks GitHub for the latest release, now.")
+                    .clicked()
+                {
+                    app.updater.start();
+                }
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = CTRL_GAP;
+                    match &app.updater.status {
+                        update::Status::Idle => {
+                            ui.label(RichText::new("Not checked yet.").color(KEY));
+                        }
+                        update::Status::Checking => {
+                            ui.spinner();
+                            ui.label(RichText::new("Checking…").color(KEY));
+                        }
+                        update::Status::UpToDate => {
+                            ui.label(RichText::new("Up to date.").color(GOOD));
+                        }
+                        update::Status::Newer(r) => {
+                            let r = r.clone();
+                            ui.label(
+                                RichText::new(format!("{} available.", r.version)).color(ACCENT),
+                            );
+                            ui.hyperlink_to(RichText::new("Release page"), &r.url);
+                            let skipped =
+                                app.settings.update_skipped.as_deref() == Some(r.version.as_str());
+                            let label = if skipped { "Remind me" } else { "Skip" };
+                            if ui.small_button(label).clicked() {
+                                app.settings.update_skipped = (!skipped).then(|| r.version.clone());
+                            }
+                        }
+                        update::Status::Failed(e) => {
+                            ui.label(RichText::new(format!("Check failed: {e}")).color(KEY))
+                                .on_hover_text(
+                                    "Offline, or GitHub declined the request. Nothing else is \
+                                     affected.",
+                                );
+                        }
                     }
                 });
-            });
-            ui.horizontal(|ui| match &app.updater.status {
-                update::Status::Idle => {
-                    ui.label(RichText::new("Not checked yet.").small().color(KEY));
-                }
-                update::Status::Checking => {
-                    ui.spinner();
-                    ui.label(RichText::new("Checking…").small().color(KEY));
-                }
-                update::Status::UpToDate => {
-                    ui.label(RichText::new("Up to date.").small().color(GOOD));
-                }
-                update::Status::Newer(r) => {
-                    let r = r.clone();
-                    ui.label(
-                        RichText::new(format!("{} available.", r.version))
-                            .small()
-                            .color(ACCENT),
-                    );
-                    ui.hyperlink_to(RichText::new("Release page").small(), &r.url);
-                    let skipped =
-                        app.settings.update_skipped.as_deref() == Some(r.version.as_str());
-                    let label = if skipped { "Remind me" } else { "Skip" };
-                    if ui.small_button(label).clicked() {
-                        app.settings.update_skipped = (!skipped).then(|| r.version.clone());
-                    }
-                }
-                update::Status::Failed(e) => {
-                    ui.label(
-                        RichText::new(format!("Check failed: {e}"))
-                            .small()
-                            .color(KEY),
-                    )
-                    .on_hover_text(
-                        "Offline, or GitHub declined the request. Nothing else is affected.",
-                    );
-                }
+                ui.end_row();
             });
         },
     );
