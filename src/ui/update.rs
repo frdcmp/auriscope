@@ -14,6 +14,24 @@ pub const ENABLED: bool = cfg!(feature = "update-check");
 
 pub const REPO_URL: &str = "https://github.com/frdcmp/auriscope";
 pub const CURRENT: &str = env!("CARGO_PKG_VERSION");
+/// `git describe` at build time, or empty outside a checkout. See `build.rs`.
+pub const GIT_DESCRIBE: &str = env!("AURISCOPE_GIT_DESCRIBE");
+
+/// True when this was built from a working tree that is not exactly the tag
+/// matching `CURRENT`: a development build, ahead of or dirty against it.
+pub fn is_dev_build() -> bool {
+    !GIT_DESCRIBE.is_empty() && GIT_DESCRIBE != format!("v{CURRENT}")
+}
+
+/// What `--version` prints. The first whitespace-separated field is always the
+/// plain version, because the installers parse it to decide about upgrades.
+pub fn version_line() -> String {
+    if is_dev_build() {
+        format!("{CURRENT} (dev {GIT_DESCRIBE})")
+    } else {
+        CURRENT.to_string()
+    }
+}
 
 /// Minimum gap between two automatic checks.
 const INTERVAL: Duration = Duration::from_secs(24 * 60 * 60);

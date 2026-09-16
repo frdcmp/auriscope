@@ -15,7 +15,7 @@ fn main() -> eframe::Result {
     // one, and are harmless when double-clicked.
     match arg.as_deref().and_then(|a| a.to_str()) {
         Some("--version" | "-V") => {
-            println!("{}", env!("CARGO_PKG_VERSION"));
+            println!("{}", ui::update::version_line());
             return Ok(());
         }
         Some("--help" | "-h") => {

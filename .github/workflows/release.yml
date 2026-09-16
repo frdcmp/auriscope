@@ -25,6 +25,11 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          # build.rs stamps the binary with `git describe`. The default
+          # shallow checkout has no tags, which would make a released build
+          # describe itself as a development one.
+          fetch-depth: 0
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}

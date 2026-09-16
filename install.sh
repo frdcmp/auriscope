@@ -11,6 +11,8 @@
 #
 #   --source          build from source instead: the checkout this script sits
 #                     in, or a clone of `main` in ~/.cache/auriscope-src
+#   --git             bleeding edge: always fetch the newest `main` and build
+#                     that, ignoring any checkout you are standing in
 #   --version vX.Y.Z  a specific release instead of the latest
 #   --force           reinstall even if that version is already installed
 #   --uninstall       remove everything this script installed
@@ -30,13 +32,16 @@ CACHE="${XDG_CACHE_HOME:-$HOME/.cache}/auriscope-src"
 MODE=release
 VERSION=""
 FORCE=0
+# --git: build the newest main rather than whatever checkout we are in.
+FRESH=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --source) MODE=source ;;
+    --git) MODE=source; FRESH=1 ;;
     --uninstall) MODE=uninstall ;;
     --version) VERSION="$2"; shift ;;
     --force) FORCE=1 ;;
-    -h|--help) sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help) sed -n '2,22p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "unknown option: $1" >&2; exit 2 ;;
   esac
   shift
@@ -56,6 +61,10 @@ installed_version() {
   # No display, no stdin, no window: belt and braces if timeout is missing.
   DISPLAY= WAYLAND_DISPLAY= $probe "$BIN" --version </dev/null 2>/dev/null | head -1 || true
 }
+# Just the number, for comparing against a tag.
+bare_version() { installed_version | awk '{print $1}'; }
+# A build from git rather than a release; the printed line carries a suffix.
+is_dev_build() { case "$(installed_version)" in *\(dev*) return 0 ;; *) return 1 ;; esac; }
 die() { echo "error: $*" >&2; exit 1; }
 need() { command -v "$1" >/dev/null 2>&1 || die "$1 is required"; }
 
@@ -99,8 +108,10 @@ if [ "$MODE" = release ]; then
     VERSION="${VERSION##*/}"
     [ -n "$VERSION" ] || die "could not resolve the latest release"
   fi
-  have="$(installed_version)"
-  if [ "$FORCE" = 0 ] && [ -n "$have" ] && [ "v$have" = "$VERSION" ]; then
+  have="$(bare_version)"
+  # A development build is never "current": installing a release over it is
+  # exactly how you go back to a tested version.
+  if [ "$FORCE" = 0 ] && [ -n "$have" ] && [ "v$have" = "$VERSION" ] && ! is_dev_build; then
     say "Auriscope $have is already installed and current."
     exit 0
   fi
@@ -118,20 +129,27 @@ if [ "$MODE" = release ]; then
   metainfo="$WORK/auriscope/$APP_ID.metainfo.xml"
 else
   need cargo
-  # Inside a checkout? Build that. Otherwise clone (or update) main.
+  # Inside a checkout? Build that, unless --git asked for the newest main.
   here="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd || true)"
-  if [ -n "$here" ] && grep -q '^name = "auriscope"' "$here/Cargo.toml" 2>/dev/null; then
+  if [ "$FRESH" = 0 ] && [ -n "$here" ] \
+     && grep -q '^name = "auriscope"' "$here/Cargo.toml" 2>/dev/null; then
     src="$here"
   else
     need git
     if [ -d "$CACHE/.git" ]; then
-      git -C "$CACHE" pull --ff-only
+      say "Fetching the newest main into $CACHE"
+      # --depth 1 clones cannot fast-forward across a force-push; reset to
+      # whatever origin/main is now, which is what "bleeding edge" means.
+      git -C "$CACHE" fetch --depth 1 origin main
+      git -C "$CACHE" reset --hard FETCH_HEAD
     else
       git clone --depth 1 "https://github.com/$REPO.git" "$CACHE"
     fi
+    # `git describe` needs tags to name the build; a depth-1 clone has none.
+    git -C "$CACHE" fetch --tags --depth 1 origin 2>/dev/null || true
     src="$CACHE"
   fi
-  say "Building Auriscope from $src (release profile, this takes a few minutes)"
+  say "Building Auriscope from $src @ $(git -C "$src" rev-parse --short=7 HEAD 2>/dev/null || echo 'no git') (release profile, a few minutes)"
   if ! (cd "$src" && cargo build --release --locked); then
     cat >&2 <<'HINT'
 

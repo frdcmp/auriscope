@@ -70,7 +70,8 @@ They take the latest release, verify its SHA-256 and install for the current use
 
 | Option | What it does |
 | :--- | :--- |
-| `--source` | Build from source instead of downloading: your own checkout if you run it from one, otherwise a shallow clone of `main`. Linux only. |
+| `--git` | **Bleeding edge.** Fetch the newest `main` from GitHub, build it and install that, ignoring any checkout you happen to be standing in. Linux only. |
+| `--source` | Build and install the working tree you run it from, or a clone of `main` if there is none. Linux only. |
 | `--version vX.Y.Z` | Install a specific release rather than the latest. |
 | `--force` | Reinstall even when that version is already installed. |
 | `--uninstall` | Remove everything the script installed. |
@@ -242,6 +243,40 @@ Rust throughout. The choices are deliberate; the reasoning matters more than the
 ---
 
 ## 🔨 Building from Source
+
+### Running the newest code
+
+Releases are the tested versions. To run what is on `main` right now instead:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/frdcmp/auriscope/main/install.sh | bash -s -- --git
+```
+
+That clones `main` into `~/.cache/auriscope-src` (reusing and resetting it on later runs), builds in release mode and installs exactly as the normal path does. Run it again whenever you want to move forward; it always takes the newest commit, so there is nothing to compare and it always rebuilds.
+
+From a clone you already have, `./install.sh --source` builds **your working tree** — your own edits included — while `./install.sh --git` ignores it and takes GitHub's `main`.
+
+A development build says so. `--version` and the About card carry the `git describe` stamp, so you can tell one from a release:
+
+```console
+$ auriscope --version
+0.1.1                              # a release
+0.1.1 (dev v0.1.1-7-g1a2b3c4)      # seven commits past v0.1.1
+```
+
+Installing a release over a development build always proceeds rather than reporting "already current", which is how you go back to a tested version:
+
+```bash
+./install.sh --force               # or just: install.sh, which sees the dev stamp
+```
+
+**Arch users** have a packaged equivalent that `pacman` then manages, versioned the usual `-git` way:
+
+```bash
+cd packaging/arch/auriscope-git && makepkg -si
+```
+
+### Building by hand
 
 Requires a stable Rust toolchain — `rust-toolchain.toml` pins the exact version. Linux needs ALSA development headers, which PipeWire systems still use for the cpal backend, plus GTK 3 for the native file dialog; Windows needs nothing extra, since WASAPI and DX12 are part of the OS.
 

@@ -116,8 +116,13 @@ function Get-InstalledVersion {
 }
 
 $have = Get-InstalledVersion
-if (-not $Force -and $have -and "v$have" -eq $Version) {
-    Say "$AppName $have is already installed and current."
+# --version prints "0.1.1", or "0.1.1 (dev v0.1.1-7-g1a2b3c4)" for a build
+# from git. Compare the number only, and never treat a development build as
+# current: installing a release over it is how you go back to a tested one.
+$haveVersion = if ($have) { ($have -split '\s+')[0] } else { $null }
+$haveIsDev   = $have -and $have -match '\(dev'
+if (-not $Force -and $haveVersion -and "v$haveVersion" -eq $Version -and -not $haveIsDev) {
+    Say "$AppName $haveVersion is already installed and current."
     exit 0
 }
 
@@ -129,7 +134,7 @@ $work    = Join-Path ([System.IO.Path]::GetTempPath()) "auriscope-$(Get-Random)"
 New-Item -ItemType Directory -Force -Path $work | Out-Null
 
 try {
-    if ($have) { Say "Updating $AppName $have to $Version" } else { Say "Downloading $AppName $Version" }
+    if ($have) { Say "Updating $AppName $haveVersion to $Version" } else { Say "Downloading $AppName $Version" }
     $zip = Join-Path $work $archive
     # Invoke-WebRequest's progress bar makes large downloads crawl in PS 5.
     $oldProgress = $ProgressPreference

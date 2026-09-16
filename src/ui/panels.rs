@@ -18,6 +18,13 @@ use super::views::{V_ZOOM_MAX, V_ZOOM_MIN, channel_label};
 const TITLEBAR_BG: Color32 = Color32::from_rgb(30, 30, 36);
 const CLOSE_HOVER: Color32 = Color32::from_rgb(224, 27, 36);
 
+/// Height of the transport bar's widget row. egui otherwise assumes a row is
+/// `interact_size.y` tall and centres small widgets in that band, while taller
+/// ones (the painted transport icons) hang below it — so the "Open…" button and
+/// the labels sat a few pixels above the icons. Pinning the row to the tallest
+/// widget puts everything on one centre line.
+const ROW_H: f32 = 26.0;
+
 enum WindowIcon {
     Minimize,
     Maximize,
@@ -254,6 +261,7 @@ pub fn resize_borders(ctx: &egui::Context) {
 pub fn top_bar(app: &mut App, root: &mut egui::Ui) {
     egui::Panel::top("top").show(root, |ui| {
         ui.horizontal(|ui| {
+            ui.set_height(ROW_H);
             if ui.button("Open…").on_hover_text("Ctrl+O").clicked() {
                 app.pick_file();
             }
@@ -389,7 +397,7 @@ fn update_notice(app: &mut App, ui: &mut egui::Ui) {
 /// A sliders glyph for the settings button: three tracks with a knob each,
 /// drawn as vectors so no fallback font decides how it looks.
 fn settings_button(ui: &mut egui::Ui, active: bool) -> egui::Response {
-    let (resp, painter) = ui.allocate_painter(vec2(28.0, 26.0), Sense::click());
+    let (resp, painter) = ui.allocate_painter(vec2(28.0, ROW_H), Sense::click());
     let visuals = ui.style().visuals.clone();
     let fg = if active {
         visuals.widgets.active.fg_stroke.color
@@ -434,7 +442,7 @@ fn transport_button(
     icon: Transport,
     tooltip: &str,
 ) -> egui::Response {
-    let (resp, painter) = ui.allocate_painter(vec2(30.0, 26.0), Sense::click());
+    let (resp, painter) = ui.allocate_painter(vec2(30.0, ROW_H), Sense::click());
     let visuals = ui.style().visuals.clone();
     let (bg, fg) = if !enabled {
         (Color32::TRANSPARENT, Color32::from_gray(100))
@@ -560,6 +568,9 @@ pub fn side_panel(app: &mut App, root: &mut egui::Ui) {
         .show(root, |ui| {
             egui::ScrollArea::vertical()
                 .auto_shrink([false, false])
+                // No scrollbar: it ate width from an already narrow column and
+                // the wheel scrolls the cards just the same.
+                .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden)
                 .show(ui, |ui| {
                     ui.spacing_mut().item_spacing.y = 8.0;
                     if app.audio.is_none() {
@@ -590,6 +601,11 @@ const GOOD: Color32 = Color32::from_rgb(120, 200, 130);
 const WARN: Color32 = Color32::from_rgb(247, 198, 72);
 const BAD: Color32 = Color32::from_rgb(255, 110, 110);
 
+/// Card padding: tight in the side panel, which is a narrow column, and roomier
+/// in the settings dialog, which has the width to breathe.
+const CARD_PAD: Margin = Margin::symmetric(10, 8);
+const CARD_PAD_WIDE: Margin = Margin::symmetric(14, 12);
+
 /// A titled card: icon, title, optional right-aligned note, then the body.
 fn card(
     ui: &mut egui::Ui,
@@ -598,13 +614,36 @@ fn card(
     trailing: Option<String>,
     body: impl FnOnce(&mut egui::Ui),
 ) {
+    card_with(ui, CARD_PAD, icon, title, trailing, body);
+}
+
+/// The same card with the settings dialog's roomier padding.
+fn wide_card(
+    ui: &mut egui::Ui,
+    icon: &str,
+    title: &str,
+    trailing: Option<String>,
+    body: impl FnOnce(&mut egui::Ui),
+) {
+    card_with(ui, CARD_PAD_WIDE, icon, title, trailing, body);
+}
+
+fn card_with(
+    ui: &mut egui::Ui,
+    pad: Margin,
+    icon: &str,
+    title: &str,
+    trailing: Option<String>,
+    body: impl FnOnce(&mut egui::Ui),
+) {
+    let roomy = pad == CARD_PAD_WIDE;
     egui::Frame::new()
         .fill(CARD_BG)
         .corner_radius(6.0)
-        .inner_margin(Margin::symmetric(10, 8))
+        .inner_margin(pad)
         .show(ui, |ui| {
             ui.set_width(ui.available_width());
-            ui.spacing_mut().item_spacing.y = 4.0;
+            ui.spacing_mut().item_spacing.y = if roomy { 6.0 } else { 4.0 };
             ui.horizontal(|ui| {
                 ui.label(RichText::new(icon).color(ACCENT).size(fonts::BODY));
                 ui.label(
@@ -619,7 +658,7 @@ fn card(
                     });
                 }
             });
-            ui.add_space(2.0);
+            ui.add_space(if roomy { 5.0 } else { 2.0 });
             body(ui);
         });
 }
@@ -1272,11 +1311,11 @@ pub fn settings_window(app: &mut App, ctx: &egui::Context) {
             egui::Frame::new()
                 .fill(SIDE_BG)
                 .corner_radius(8.0)
-                .inner_margin(Margin::same(10)),
+                .inner_margin(Margin::same(14)),
         )
         .show(ctx, |ui| {
-            ui.set_width(480.0);
-            ui.spacing_mut().item_spacing.y = 8.0;
+            ui.set_width(SETTINGS_W);
+            ui.spacing_mut().item_spacing.y = CARD_GAP;
             ui.horizontal(|ui| {
                 ui.label(
                     RichText::new(fonts::icon::COGS)
@@ -1310,7 +1349,7 @@ pub fn settings_window(app: &mut App, ctx: &egui::Context) {
                 area = area.vertical_scroll_offset(offset);
             }
             let out = area.show(ui, |ui| {
-                ui.spacing_mut().item_spacing.y = 8.0;
+                ui.spacing_mut().item_spacing.y = CARD_GAP;
                 panes_card(app, ui);
                 spectrogram_card(app, ui);
                 waveform_card(app, ui);
@@ -1325,13 +1364,20 @@ pub fn settings_window(app: &mut App, ctx: &egui::Context) {
     }
 }
 
+/// Width of the settings dialog, and the gap between its cards.
+const SETTINGS_W: f32 = 560.0;
+const CARD_GAP: f32 = 12.0;
 /// Width of the label column in every settings grid, so controls line up
 /// across cards.
 const LABEL_W: f32 = 156.0;
-const GRID_GAP: f32 = 12.0;
+const GRID_GAP: f32 = 18.0;
+/// Vertical gap between the rows of a settings grid.
+const ROW_GAP: f32 = 10.0;
+/// Gap between the controls within one row, e.g. a run of checkboxes.
+const CTRL_GAP: f32 = 12.0;
 /// Width of a slider's value box plus its gap, reserved so the slider track
 /// ends at the same x in every row.
-const VALUE_W: f32 = 92.0;
+const VALUE_W: f32 = 96.0;
 const COMBO_W: f32 = 150.0;
 
 /// One labelled control row inside a settings grid.
@@ -1340,7 +1386,10 @@ fn setting(ui: &mut egui::Ui, label: &str, hint: &str, control: impl FnOnce(&mut
     if !hint.is_empty() {
         l.on_hover_text(hint);
     }
-    ui.horizontal(|ui| control(ui));
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = CTRL_GAP;
+        control(ui);
+    });
     ui.end_row();
 }
 
@@ -1349,7 +1398,7 @@ fn settings_grid(ui: &mut egui::Ui, id: &str, rows: impl FnOnce(&mut egui::Ui)) 
     egui::Grid::new(id)
         .num_columns(2)
         .min_col_width(LABEL_W)
-        .spacing([GRID_GAP, 6.0])
+        .spacing([GRID_GAP, ROW_GAP])
         .show(ui, |ui| {
             ui.spacing_mut().slider_width = slider_w;
             rows(ui);
@@ -1381,7 +1430,7 @@ fn combo(id: &str) -> egui::ComboBox {
 }
 
 fn panes_card(app: &mut App, ui: &mut egui::Ui) {
-    card(ui, fonts::icon::LIST, "Panes", None, |ui| {
+    wide_card(ui, fonts::icon::LIST, "Panes", None, |ui| {
         let both = app.settings.show_waveform && app.settings.show_spectrogram;
         let merged = both && app.settings.merge_views;
         settings_grid(ui, "panes-grid", |ui| {
@@ -1437,7 +1486,7 @@ fn panes_card(app: &mut App, ui: &mut egui::Ui) {
 }
 
 fn spectrogram_card(app: &mut App, ui: &mut egui::Ui) {
-    card(ui, fonts::icon::BARS, "Spectrogram", None, |ui| {
+    wide_card(ui, fonts::icon::BARS, "Spectrogram", None, |ui| {
         let mut stft = app.settings.stft;
         settings_grid(ui, "stft-grid", |ui| {
             setting(
@@ -1587,7 +1636,7 @@ fn spectrogram_card(app: &mut App, ui: &mut egui::Ui) {
 }
 
 fn waveform_card(app: &mut App, ui: &mut egui::Ui) {
-    card(ui, fonts::icon::GAUGE, "Waveform", None, |ui| {
+    wide_card(ui, fonts::icon::GAUGE, "Waveform", None, |ui| {
         let merged =
             app.settings.merge_views && app.settings.show_waveform && app.settings.show_spectrogram;
         settings_grid(ui, "wave-grid", |ui| {
@@ -1663,7 +1712,7 @@ fn waveform_card(app: &mut App, ui: &mut egui::Ui) {
 }
 
 fn spectrum_card(app: &mut App, ui: &mut egui::Ui) {
-    card(ui, fonts::icon::BARS, "Spectrum", None, |ui| {
+    wide_card(ui, fonts::icon::BARS, "Spectrum", None, |ui| {
         let mut size = app.settings.spectrum_size;
         settings_grid(ui, "spectrum-grid", |ui| {
             setting(ui, "FFT size", "", |ui| {
@@ -1697,7 +1746,7 @@ fn spectrum_card(app: &mut App, ui: &mut egui::Ui) {
 }
 
 fn keys_card(ui: &mut egui::Ui) {
-    card(ui, fonts::icon::INFO, "Keys", None, |ui| {
+    wide_card(ui, fonts::icon::INFO, "Keys", None, |ui| {
         const KEYS: [(&str, &str); 16] = [
             ("Space", "play / pause"),
             ("Ctrl+O", "open a file"),
@@ -1720,7 +1769,7 @@ fn keys_card(ui: &mut egui::Ui) {
         egui::Grid::new("keys-grid")
             .num_columns(2)
             .min_col_width(LABEL_W)
-            .spacing([GRID_GAP, 4.0])
+            .spacing([GRID_GAP, 7.0])
             .striped(true)
             .show(ui, |ui| {
                 for (k, v) in KEYS {
@@ -1736,9 +1785,12 @@ fn keys_card(ui: &mut egui::Ui) {
 }
 
 fn about_card(app: &mut App, ui: &mut egui::Ui) {
-    card(ui, fonts::icon::TAG, "About", None, |ui| {
+    wide_card(ui, fonts::icon::TAG, "About", None, |ui| {
         kv_grid(ui, "about-grid", |ui| {
             kv(ui, "Version", update::CURRENT);
+            if update::is_dev_build() {
+                kv_colored(ui, "Build", update::GIT_DESCRIBE, ACCENT);
+            }
             ui.label(RichText::new("Source").small().color(KEY));
             ui.hyperlink_to(
                 RichText::new("github.com/frdcmp/auriscope").monospace(),
