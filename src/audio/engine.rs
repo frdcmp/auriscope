@@ -707,6 +707,9 @@ mod tests {
                 bits_per_sample: None,
                 frames: n,
                 tags: Vec::new(),
+                file_size: 0,
+                modified: None,
+                wav: None,
             },
             channels: vec![tone],
         });

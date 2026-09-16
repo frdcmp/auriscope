@@ -12,7 +12,7 @@ pub use colormap::ColorMap;
 pub use pyramid::{Bin, WaveformPyramid};
 pub use spectrum::LiveSpectrum;
 pub use stats::{ChannelStats, FileStats, compute_stats};
-pub use stft::{Spectrogram, StftParams, ViewParams, render_view};
+pub use stft::{DetailTile, Spectrogram, StftParams, ViewParams, render_view};
 pub use window::WindowKind;
 
 /// Decibels from a linear amplitude, floored so silence does not become -inf.

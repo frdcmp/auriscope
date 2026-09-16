@@ -4,6 +4,7 @@ use eframe::egui;
 use egui::{Align2, Color32, FontId, Rangef, Sense, Stroke, pos2};
 
 use super::App;
+use super::fonts;
 use super::util::fmt_hz;
 
 const MIN_HZ: f32 = 20.0;
@@ -27,7 +28,7 @@ pub fn bottom_panel(app: &mut App, root: &mut egui::Ui) {
                     rect.center(),
                     Align2::CENTER_CENTER,
                     "spectrum",
-                    FontId::proportional(12.0),
+                    FontId::proportional(fonts::BODY),
                     Color32::from_gray(90),
                 );
                 return;
@@ -53,7 +54,7 @@ pub fn bottom_panel(app: &mut App, root: &mut egui::Ui) {
                         pos2(x + 2.0, rect.bottom() - 2.0),
                         Align2::LEFT_BOTTOM,
                         fmt_hz(hz),
-                        FontId::monospace(9.0),
+                        FontId::monospace(fonts::RULER),
                         Color32::from_gray(140),
                     );
                 }
@@ -65,7 +66,7 @@ pub fn bottom_panel(app: &mut App, root: &mut egui::Ui) {
                     pos2(rect.right() - 2.0, y),
                     Align2::RIGHT_BOTTOM,
                     format!("{db:.0}"),
-                    FontId::monospace(9.0),
+                    FontId::monospace(fonts::RULER),
                     Color32::from_gray(140),
                 );
             }

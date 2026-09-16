@@ -28,6 +28,11 @@ pub struct FileInfo {
     pub frames: usize,
     /// Tag key/value pairs as found in the container, in file order.
     pub tags: Vec<(String, String)>,
+    /// Size on disk, in bytes.
+    pub file_size: u64,
+    pub modified: Option<std::time::SystemTime>,
+    /// RIFF/WAVE header, when the file is one.
+    pub wav: Option<super::riff::WavHeader>,
 }
 
 impl FileInfo {
@@ -44,6 +49,20 @@ impl FileInfo {
             .file_name()
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_default()
+    }
+
+    /// Directory the file lives in, for display.
+    pub fn directory(&self) -> String {
+        self.path
+            .parent()
+            .map(|p| p.display().to_string())
+            .unwrap_or_default()
+    }
+
+    /// Average bit rate of the file as stored, in kbit/s.
+    pub fn bitrate_kbps(&self) -> Option<f64> {
+        let secs = self.duration_secs();
+        (secs > 0.0 && self.file_size > 0).then(|| self.file_size as f64 * 8.0 / secs / 1000.0)
     }
 }
 
@@ -210,6 +229,9 @@ pub fn decode_file(path: &Path, progress: &dyn Fn(f32)) -> Result<Arc<DecodedAud
         channels: channels.len(),
         bits_per_sample: params.bits_per_sample,
         frames,
+        file_size: std::fs::metadata(path).map_or(0, |m| m.len()),
+        modified: std::fs::metadata(path).ok().and_then(|m| m.modified().ok()),
+        wav: super::riff::read_wav_header(path),
         tags,
     };
     Ok(Arc::new(DecodedAudio { info, channels }))

@@ -34,10 +34,14 @@
 ## ✨ Features
 
 ### 🌊 1. Waveform
-Peak and RMS envelope drawn from a multi-resolution pyramid, so a two-hour file zoomed all the way out is a read of a few thousand precomputed values rather than a scan of hundreds of millions of samples. Per-channel display, clipped runs highlighted in red, zoom from the whole file down to individual samples.
+Peak and RMS envelope drawn from a multi-resolution pyramid, so a two-hour file zoomed all the way out is a read of a few thousand precomputed values rather than a scan of hundreds of millions of samples. Per-channel display, a dBFS scale that follows the vertical zoom, clipped runs highlighted in red, zoom from the whole file down to individual samples.
 
 ### 🔥 2. Spectrogram
-An STFT heatmap of the **whole file**, available the moment analysis finishes rather than filling in as you listen. Configurable window size, overlap and window function, linear or logarithmic frequency axis, six perceptually uniform colour maps, and adjustable dB floor and ceiling. Hovering reads out time, frequency, level and channel. This is the view you actually diagnose problems in.
+An STFT heatmap of the **whole file**, available the moment analysis finishes rather than filling in as you listen. Configurable window size, overlap and window function, linear or logarithmic frequency axis, seven colour maps led by an Amber palette in the restoration-suite tradition, a contrast curve, and adjustable dB floor and ceiling. Hovering reads out time, frequency, level and channel. This is the view you actually diagnose problems in.
+
+**It sharpens as you zoom.** The whole-file pass is computed at one hop, so magnifying past a column per pixel would otherwise just enlarge blocks. Zooming in instead triggers a background re-transform of the visible range at whatever hop the current zoom deserves, and sampling interpolates rather than peak-picks wherever the view magnifies. Note the honest limit: hop controls how densely the transform is *sampled*, while true time resolution is set by the window length — to separate events closer together than one window, shorten the window.
+
+**Reassignment, for the RX look.** The reason a restoration suite's spectrogram looks crisper than a textbook STFT is not a finer FFT; it is *time-frequency reassignment*. An ordinary spectrogram paints each bin's energy at the bin's nominal frequency and the frame's nominal time, so a steady tone smears across the window's main lobe and a click smears across every frame that overlaps it. Reassignment computes two extra transforms per frame — against the time-weighted window and the derivative window — which give, per bin, where in time the energy actually sits and what frequency it actually has, then paints it there instead. Tones collapse to hairlines, clicks to single columns. Switch it on in Settings; it costs three FFTs per frame instead of one. Cells more than 70 dB below the frame's peak are left where the plain STFT would put them, because down there the estimates are dominated by leakage and point nowhere useful. Everything else is stored with its *sub-bin position*, one extra byte per cell, and drawn there: rounding to whole bins would turn a gliding harmonic into a staircase one bin tall per step, which at high zoom is many pixels, while smearing it across neighbouring bins would triple the line's width. Recording the fraction keeps lines one bin thin and lets them glide continuously. Zooming keeps drawing the last high-resolution tile while its replacement is computed, and recomputation waits for the view to settle, so the picture never snaps back to the coarse level between wheel notches. The image itself is rendered on a worker thread, in parallel across pixel columns; until it lands, the previous image is drawn shifted and stretched to the new view, so the UI thread never waits on a render and a wheel notch costs a frame, not a redraw.
 
 ### 📈 3. Realtime Spectrum
 A separate, much cheaper FFT over whatever just went to the output device, with adjustable averaging and a decaying peak-hold trace. Logarithmic frequency axis matching the spectrogram above it.
@@ -49,10 +53,21 @@ Everything a deliverable check needs, computed in one pass on open:
 *   **Per channel:** sample peak, true peak, RMS and DC offset.
 *   **Stereo:** phase correlation, to catch an inverted or collapsing mix.
 
-### 🎛️ 5. A Real Player
+### ⚙️ 5. One Settings Dialog
+A gear in the transport bar (or `Ctrl+,`) opens a modal holding every view control in one place: which panes to show at all — waveform, spectrogram, spectrum, each independently — plus the window size, overlap, window function, colour map, frequency scale and dB range for the spectrogram, the RMS overlay, strip height and vertical zoom for the waveform, and the FFT size and averaging for the spectrum. Hiding a pane gives its space to the others. The side panel keeps what you read rather than what you set.
+
+**Merge, if you prefer one pane.** A toggle draws the waveform straight over the spectrogram, sharing a single strip instead of stacking two, with independent opacity for the waveform and for the spectrogram underneath it. The waveform keeps its blue, its dBFS scale moves to the right edge so the frequency axis keeps the left, the divider disappears, the vertical-zoom gesture still applies to the overlay, and clipped runs stay flagged in red on top of the heat map.
+
+### 🎛️ 6. A Real Player
 Transport controls, sample-accurate seeking by clicking the waveform, drag-to-select with loop regions, gain and pan, per-channel mute and solo, keyboard-driven navigation, and a clear readout of what the file actually *is* — rate, depth, channels, codec, duration and container tags. Open by double-click, drag-and-drop, `Ctrl+O` or a command-line argument.
 
-### 🔒 6. Read-Only by Design
+### 🗂️ 7. A Side Panel Worth Reading
+
+The right-hand panel is a stack of cards, one typeface, one type scale. **File**: name, folder, container, codec, rate, layout, depth, duration, frames, size on disk, bit rate, footprint in memory, modified time. **WAVE header**, read straight from the RIFF/RF64 structure rather than from the decoder: the raw `fmt ` fields, and every chunk with its offset and size. **Broadcast Wave**, when a `bext` chunk is present: description, originator, reference, origination date and time, the time reference as a timecode, UMID, and the v2 loudness fields and coding history. **Tags** from `LIST INFO` and from the container, **Markers** from `cue ` chunks with their labels. **Loudness**: the R128 set plus the distance to the −23, −16 and −14 LUFS targets, headroom to 0 dBTP and crest factor. **Levels**: per-channel peak, true peak and RMS as bars on a 60 dB scale, with clip and DC warnings and mute/solo. **Analysis**: what the spectrogram is actually computing — window, hop, resolution, reassignment, the detail tile in use, the visible range. **Cursor**: playhead, pointer, selection and loop.
+
+Text is set in [JetBrains Mono Nerd Font](https://www.nerdfonts.com/), bundled: the proportional cut for labels, the mono cut for numbers so columns line up, and its icon glyphs for the card headers. Every size in the app comes from one type scale.
+
+### 🔒 8. Read-Only by Design
 Destructive editing is explicitly out of scope. Auriscope opens files and never writes to them. Your settings persist between runs; your audio does not change.
 
 ---
@@ -128,7 +143,7 @@ Rust throughout. The choices are deliberate; the reasoning matters more than the
 | **Resampling** | `rubato` 5.0 | High-quality async sinc resampling for files whose rate does not match the output device. |
 | **Loudness** | `ebur128` | Reference R128 implementation, run in the same pass as the pyramid. |
 | **Thread plumbing** | `rtrb` 0.4 | Lock-free SPSC ring buffers, for both the playback ring and the analysis tap. |
-| **Colour maps** | `colorous` | Magma, inferno, viridis, plasma, turbo — perceptually uniform and colourblind-safe. |
+| **Colour maps** | `colorous` + one of our own | Amber (black, navy, blue, orange, amber, white — the default), plus magma, inferno, viridis, plasma and turbo from `colorous`. A contrast gamma sits on top of whichever is chosen. |
 | **File dialogs** | `rfd` | Native open dialogs on both platforms. |
 
 > **GUI choice, stated plainly: egui over Tauri.** Tauri would mean drawing a spectrogram into a canvas from JavaScript and moving audio frames across the webview boundary sixty times a second. For a tool whose entire job is high-rate custom drawing, that boundary is the wrong place to be.
@@ -149,7 +164,7 @@ Rust throughout. The choices are deliberate; the reasoning matters more than the
 ### Known gaps
 
 *   **Large files.** The streaming fallback above the PCM cache cap is not implemented: every file is decoded fully into RAM. The 8-bit spectrogram cache also lives in RAM, roughly one byte per STFT cell per channel.
-*   **Spectrogram on the GPU.** The spectrogram is uploaded as a texture, but the log-frequency mapping and max-pooling for the visible region are done on the CPU into a viewport-sized image whenever the view changes. A shader doing that sampling is the intended end state.
+*   **Spectrogram on the GPU.** The spectrogram is uploaded as a texture, but the log-frequency mapping and resampling for the visible region are done on the CPU into a viewport-sized image whenever the view changes. A shader doing that sampling is the intended end state. The on-demand detail tiles would stay as they are: they add data the GPU does not have, not just a faster way to draw it.
 *   **Live spectrum thread.** The realtime FFT runs on the UI thread from the tap ring, not on its own thread. It is one 4096-point real FFT per frame and has not been a problem; it will move if it ever is.
 *   **Untested on Windows.** It compiles there in CI. Nobody has heard it.
 
@@ -232,13 +247,22 @@ xdg-mime default io.github.frdcmp.Auriscope.desktop audio/x-wav
 | `Space` | Play / pause |
 | `←` `→` | Seek ∓5 s (hold `Shift` for 1 s) |
 | `Home` `End` | Jump to start / end |
-| `L` | Loop the current selection |
-| `F` / `Shift+F` | Zoom to selection / fit whole file |
+| Drag | Select. The highlight is transient; the range it made stays on the ruler |
+| Click | Seek, and drop the highlight. The ruler range stays |
+| Ruler handles | Drag either end of the range |
+| Right-click | Clear highlight and range |
+| `L` | Loop the ruler range |
+| `F` / `Shift+F` | Zoom to the highlight or range / fit whole file |
 | `+` `-` | Zoom in / out |
-| `Esc` | Clear selection and loop |
+| Middle-drag | Grab and scroll the clip sideways |
+| Drag divider | Rebalance waveform against spectrogram (double-click resets) |
+| `Esc` | Clear the highlight; press again to clear the range and loop |
 | `Ctrl+O` | Open a file |
+| `Ctrl+,` | Open the settings dialog |
 
-Click the waveform to seek, drag to select, scroll to pan, and pinch or `Ctrl`-scroll to zoom.
+Click the waveform to seek, drag to select, scroll to zoom at the pointer, `Shift`-scroll to pan, and pinch or `Ctrl`-scroll to zoom. `Alt+Shift`-scroll scales the waveform vertically, from 0.1x to 4096x, which is about 72 dB of boost and enough to lift a noise floor to full height. The side panel carries the same control as a slider with a reset.
+
+Selection works the way a DAW's does. Dragging highlights a region in the waveform and spectrogram and also sets a *range* on the time ruler, shown as a band with a handle at each end. The next click clears the highlight but leaves the range, so you can seek around inside it; the loop plays the range, the handles adjust it, and the ruler band turns green while looping. Right-click or a second `Esc` clears it.
 
 ---
 
@@ -269,7 +293,25 @@ cargo run --example play -- file.wav 3 1.5
 # Open a file, wait for analysis, start playback, capture one frame to PPM
 # and exit. This is how the screenshot above was made.
 AURISCOPE_SCREENSHOT=shot.ppm cargo run -- file.wav
+
+# Same, but framed on a time range in seconds, which exercises the
+# high-resolution detail-tile path instead of the whole-file view.
+AURISCOPE_SCREENSHOT=shot.ppm AURISCOPE_SCREENSHOT_ZOOM=1.00,1.06 \
+  cargo run -- file.wav
+
+# Open with the settings dialog up, or with a looped range on the ruler.
+AURISCOPE_SCREENSHOT=shot.ppm AURISCOPE_SCREENSHOT_SETTINGS=1 cargo run -- file.wav
+AURISCOPE_SCREENSHOT=shot.ppm AURISCOPE_SCREENSHOT_RANGE=0.4,0.9 cargo run -- file.wav
 ```
+
+Time the spectrogram path on a real file — whole-file STFT, detail tiles and the viewport render at four zoom levels, with and without reassignment:
+
+```bash
+cargo run --release --example bench_spec -- file.wav 2048 4   # window size, overlap denominator
+AURISCOPE_THREADS=1 cargo run --release --example bench_spec -- file.wav   # force single-threaded
+```
+
+`AURISCOPE_THREADS` caps the worker threads used by tile analysis and rendering anywhere in the app; the harness also checks that the parallel tile matches the single-threaded one cell for cell.
 
 ---
 
@@ -284,6 +326,8 @@ AURISCOPE_SCREENSHOT=shot.ppm cargo run -- file.wav
 ## ⚖️ Licence
 
 **GPL-3.0-or-later.** Anyone may use it. Anyone who changes it and distributes it must publish their changes under the same terms. See [LICENSE](LICENSE).
+
+The bundled JetBrains Mono Nerd Font (`assets/fonts/`) is © The JetBrains Mono Project Authors, licensed under the SIL Open Font License 1.1 (`assets/fonts/OFL.txt`); the Nerd Fonts glyph patch is MIT.
 
 ## 🤔 Open decisions
 
