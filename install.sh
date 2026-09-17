@@ -26,6 +26,9 @@ REPO="frdcmp/auriscope"
 APP_ID="io.github.frdcmp.Auriscope"
 PREFIX="${AURISCOPE_PREFIX:-$HOME/.local}"
 BIN="$PREFIX/bin/auriscope"
+# The headless analysis binary, installed beside the app. Older releases do
+# not carry it, so everything below treats it as optional.
+CLI_BIN="$PREFIX/bin/auriscope-cli"
 SHARE="$PREFIX/share"
 CACHE="${XDG_CACHE_HOME:-$HOME/.cache}/auriscope-src"
 
@@ -79,7 +82,7 @@ esac
 # ---- uninstall ------------------------------------------------------------
 
 if [ "$MODE" = uninstall ]; then
-  rm -f "$BIN" \
+  rm -f "$BIN" "$CLI_BIN" \
     "$SHARE/applications/$APP_ID.desktop" \
     "$SHARE/metainfo/$APP_ID.metainfo.xml" \
     "$SHARE/icons/hicolor/scalable/apps/$APP_ID.svg" \
@@ -95,8 +98,8 @@ WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 
 # Where the binary, the desktop entry, the SVG and the metainfo end up before
-# installing. Both modes fill these four.
-binary=""; desktop=""; svg=""; metainfo=""
+# installing. Both modes fill these four, and `cli` when there is one.
+binary=""; cli=""; desktop=""; svg=""; metainfo=""
 
 if [ "$MODE" = release ]; then
   need curl; need tar; need sha256sum
@@ -124,6 +127,7 @@ if [ "$MODE" = release ]; then
   (cd "$WORK" && sha256sum -c --quiet "$archive.sha256") || die "checksum mismatch"
   tar -C "$WORK" -xzf "$WORK/$archive"
   binary="$WORK/auriscope/auriscope"
+  cli="$WORK/auriscope/auriscope-cli"
   desktop="$WORK/auriscope/$APP_ID.desktop"
   svg="$WORK/auriscope/$APP_ID.svg"
   metainfo="$WORK/auriscope/$APP_ID.metainfo.xml"
@@ -161,6 +165,7 @@ HINT
     exit 1
   fi
   binary="$src/target/release/auriscope"
+  cli="$src/target/release/auriscope-cli"
   desktop="$src/assets/$APP_ID.desktop"
   svg="$src/assets/$APP_ID.svg"
   metainfo="$src/assets/$APP_ID.metainfo.xml"
@@ -170,6 +175,13 @@ fi
 
 say "Installing to $PREFIX"
 install -Dm755 "$binary" "$BIN"
+# Only if this version has one: an archive from before it existed should
+# install the app rather than fail over a missing file. An `if` and not
+# `a && b`, which under `set -e` would end the script when the file is
+# absent, while `|| true` would hide a real failure to install it.
+if [ -n "$cli" ] && [ -f "$cli" ]; then
+  install -Dm755 "$cli" "$CLI_BIN"
+fi
 # The launcher session does not always have ~/.local/bin on PATH, so the
 # desktop entry names the binary by absolute path.
 mkdir -p "$SHARE/applications"
@@ -187,6 +199,9 @@ command -v gtk-update-icon-cache >/dev/null 2>&1 && gtk-update-icon-cache -f -t 
 
 now="$(installed_version)"
 say "Done: $BIN (${now:-${VERSION:-installed}})"
+if [ -x "$CLI_BIN" ]; then
+  say "Also: $CLI_BIN (analysis without a window)"
+fi
 case ":$PATH:" in
   *":$PREFIX/bin:"*) ;;
   *) echo "note: $PREFIX/bin is not on your PATH; the launcher entry works regardless." ;;

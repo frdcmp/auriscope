@@ -74,7 +74,12 @@ impl Args {
             if VALUED.contains(&name.as_str()) {
                 let value = match inline {
                     Some(v) => v,
-                    None => match it.next() {
+                    // The next word, unless it is plainly another option:
+                    // `--start --quiet` means a forgotten value, and saying so
+                    // beats complaining that "--quiet" is not a number. A
+                    // negative number is not another option, so `--db -90:0`
+                    // still reads as one.
+                    None => match it.next_if(|v| !is_option(v)) {
                         Some(v) => v,
                         None => bail!("--{name} needs a value"),
                     },
@@ -115,6 +120,20 @@ impl Args {
             },
         }
     }
+}
+
+/// Whether a word is one of this program's options rather than a value. Only
+/// names it knows count, so a file or a value that happens to start with
+/// dashes is still taken as one.
+fn is_option(word: &str) -> bool {
+    if word == "--" {
+        return true;
+    }
+    let Some(rest) = word.strip_prefix("--").or_else(|| short(word)) else {
+        return false;
+    };
+    let name = rest.split_once('=').map_or(rest, |(n, _)| n);
+    VALUED.contains(&name) || SWITCHES.contains(&name)
 }
 
 /// The two short options worth having: `-o` for output and `-h` for help.
@@ -158,6 +177,9 @@ mod tests {
         let err = |a: &[&str]| parse(a).unwrap_err().to_string();
         assert!(err(&["--nonsense"]).contains("unknown option --nonsense"));
         assert!(err(&["--start"]).contains("--start needs a value"));
+        // A forgotten value must not swallow the option after it.
+        assert!(err(&["--start", "--quiet"]).contains("--start needs a value"));
+        assert!(err(&["--output", "-o"]).contains("--output needs a value"));
         assert!(err(&["--reassign=yes"]).contains("takes no value"));
         let bad = parse(&["--width", "wide"]).unwrap();
         assert!(
@@ -166,6 +188,15 @@ mod tests {
                 .to_string()
                 .contains("\"wide\"")
         );
+    }
+
+    /// A negative number is a value, not an option: nothing this program
+    /// accepts is spelled with one dash and a digit.
+    #[test]
+    fn negative_values_are_values() {
+        let a = parse(&["render", "--db", "-90:0", "--start", "-1.5"]).unwrap();
+        assert_eq!(a.str("db"), Some("-90:0"));
+        assert_eq!(a.get::<f64>("start").unwrap(), Some(-1.5));
     }
 
     /// A file whose name starts with a dash is still a file.

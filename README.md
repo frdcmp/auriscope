@@ -250,6 +250,10 @@ The axes are the point. A bare spectrogram shows that something happened without
 when or at what frequency, which is no use to a reader who cannot click on it — a note
 weeks later, a batch report, or a model asked what is wrong with a file.
 
+[**docs/CLI.md**](docs/CLI.md) is the full reference: every option, the JSON shape, and the
+habits that make the output trustworthy — numbers first, how to pick a window size, and
+what an edit seam, a codec ceiling or a digital-silence gap actually look like.
+
 <details>
 <summary><b>Options</b></summary>
 

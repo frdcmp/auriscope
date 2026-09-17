@@ -50,6 +50,7 @@ check() {
 package() {
   cd auriscope
   install -Dm755 target/release/auriscope "$pkgdir/usr/bin/auriscope"
+  install -Dm755 target/release/auriscope-cli "$pkgdir/usr/bin/auriscope-cli"
   install -Dm644 assets/io.github.frdcmp.Auriscope.desktop \
     "$pkgdir/usr/share/applications/io.github.frdcmp.Auriscope.desktop"
   install -Dm644 assets/io.github.frdcmp.Auriscope.svg \

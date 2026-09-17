@@ -45,6 +45,7 @@ jobs:
         run: |
           mkdir -p dist/auriscope
           cp target/${{ matrix.target }}/release/auriscope dist/auriscope/
+          cp target/${{ matrix.target }}/release/auriscope-cli dist/auriscope/
           cp LICENSE README.md dist/auriscope/
           cp assets/io.github.frdcmp.Auriscope.desktop assets/io.github.frdcmp.Auriscope.svg \
              assets/io.github.frdcmp.Auriscope.metainfo.xml dist/auriscope/
@@ -57,6 +58,7 @@ jobs:
         run: |
           New-Item -ItemType Directory -Force dist/auriscope | Out-Null
           Copy-Item target/${{ matrix.target }}/release/auriscope.exe dist/auriscope/
+          Copy-Item target/${{ matrix.target }}/release/auriscope-cli.exe dist/auriscope/
           Copy-Item LICENSE, README.md dist/auriscope/
           Copy-Item assets/fonts/OFL.txt dist/auriscope/OFL-fonts.txt
           Compress-Archive -Path dist/auriscope -DestinationPath ${{ matrix.archive }}
