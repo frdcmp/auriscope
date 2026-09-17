@@ -31,6 +31,9 @@ pub struct Theme {
     pub axis: Color32,
     pub wave: Color32,
     pub wave_rms: Color32,
+    /// The spectrum lane's filled average trace, and the peak line over it.
+    pub spectrum: Color32,
+    pub spectrum_peak: Color32,
 }
 
 impl Default for Theme {
@@ -44,6 +47,8 @@ impl Default for Theme {
             axis: Color32::from_rgb(110, 110, 120),
             wave: Color32::from_rgb(90, 165, 235),
             wave_rms: Color32::from_rgb(150, 205, 255),
+            spectrum: Color32::from_rgb(70, 120, 180),
+            spectrum_peak: Color32::from_rgb(235, 170, 90),
         }
     }
 }
@@ -254,7 +259,10 @@ pub fn format_time(t: f64, step: f64, clock: bool) -> String {
 /// A frequency, in the units it is usually said in: hertz below a kilohertz,
 /// kilohertz above, and never more decimals than the value has.
 pub fn format_hz(hz: f64) -> String {
-    if hz >= 1000.0 {
+    if hz == 0.0 {
+        // The bottom of a linear axis: "0", not "0.0".
+        "0".into()
+    } else if hz >= 1000.0 {
         let k = hz / 1000.0;
         if (k - k.round()).abs() < 0.05 {
             format!("{k:.0}k")
@@ -318,6 +326,7 @@ mod tests {
 
     #[test]
     fn frequencies_are_said_the_usual_way() {
+        assert_eq!(format_hz(0.0), "0");
         assert_eq!(format_hz(20.0), "20");
         assert_eq!(format_hz(1000.0), "1k");
         assert_eq!(format_hz(1500.0), "1.5k");

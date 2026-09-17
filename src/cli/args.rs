@@ -29,11 +29,21 @@ const VALUED: &[&str] = &[
     "colormap",
     "contrast",
     "wave-scale",
+    "wave-zoom",
+    "wave-db",
+    "wave-color",
+    "merge-opacity",
+    "merge-spec-opacity",
+    "spectrum-height",
     "json",
 ];
 
 /// Switches, spelled out so a typo in one is caught rather than ignored.
 const SWITCHES: &[&str] = &[
+    "merge",
+    "no-merge",
+    "spectrum",
+    "no-spectrogram",
     "linear",
     "log",
     "reassign",

@@ -22,7 +22,7 @@ use auriscope::analysis::{
     WindowKind, compute_stats, render_view,
 };
 use auriscope::audio::{DecodedAudio, decode_file};
-use auriscope::plot::figure::{ColorBar, WaveScale};
+use auriscope::plot::figure::{ColorBar, Overlay, WaveScale};
 use auriscope::plot::{Figure, Lane, Text, Theme, write_png};
 use auriscope::report;
 
@@ -54,17 +54,26 @@ render options:
       --height PX      height of each spectrogram (default 340)
       --wave-height PX height of each waveform (default 90, 0 for none)
       --no-waveform    spectrogram only
-      --wave-scale S   db or linear (default db: shows the noise floor)
+      --no-spectrogram waveform only
+      --no-merge       waveform above the spectrogram instead of over it
+      --merge-opacity F        how strongly the waveform draws (default 1)
+      --merge-spec-opacity F   how much the spectrogram shows (default 0.55)
+      --spectrum       add a level-against-frequency pane for the whole span
+      --spectrum-height PX     how tall it is (default 150)
+      --wave-scale S   linear or db (default linear, with a dB ruler)
+      --wave-zoom F    vertical zoom for the linear scale, 1 to 4096
+      --wave-db FLOOR  bottom of the dB waveform (default -90)
+      --wave-color C   #rrggbb or r,g,b
       --window N       FFT size: 256 512 1024 2048 4096 8192 16384 (default 2048)
       --overlap PCT    window overlap, per cent or as a fraction (default 75)
       --window-fn NAME hann hamming blackman blackman-harris rectangular
       --reassign       sharpen lines and clicks by reassignment (slower)
-      --db MIN:MAX     decibel range of the colour map (default -90:0)
-      --min-hz HZ      bottom of the frequency axis (default 20 log, 0 linear)
+      --db MIN:MAX     decibel range of the colour map (default -115:-9)
+      --min-hz HZ      bottom of the frequency axis (default 0 linear, 20 log)
       --max-hz HZ      top of it (default Nyquist)
-      --linear         linear frequency axis instead of logarithmic
+      --log            logarithmic frequency axis instead of linear
       --colormap NAME  amber ember magma inferno viridis plasma turbo grey
-      --contrast F     gamma on the level before it is coloured (default 1)
+      --contrast F     gamma on the level before it is coloured (default 0.92)
       --no-axes        the bare spectrogram, with no margins or labels
       --json PATH      also write the analyze report, with how this was framed
 
@@ -72,7 +81,27 @@ Examples:
   auriscope-cli analyze take.wav | jq .loudness
   auriscope-cli render take.wav -o take.png
   auriscope-cli render take.wav --start 3.1 --end 3.7 --window 1024 -o click.png
+  auriscope-cli render take.wav --wave-zoom 512 -o floor.png
+  auriscope-cli render take.wav --no-merge --log --spectrum -o panes.png
 ";
+
+/// The view a render opens on, which is the one the window is usually left
+/// sitting on: the waveform drawn over the spectrogram as a single pane, a
+/// linear frequency axis, and a colour range wide enough at the quiet end to
+/// show a room tone without the loud end burning out.
+///
+/// These are only starting points. Every one of them has a flag.
+const DEFAULT_COLORMAP: ColorMap = ColorMap::Inferno;
+const DEFAULT_CONTRAST: f32 = 0.92;
+const DEFAULT_DB_FLOOR: f32 = -115.0;
+const DEFAULT_DB_CEILING: f32 = -9.0;
+/// Fully drawn: the waveform is the thing being read, and the spectrogram
+/// behind it is dimmed instead to make room.
+const DEFAULT_MERGE_WAVE: f32 = 1.0;
+const DEFAULT_MERGE_SPEC: f32 = 0.55;
+/// Amplitude with a decibel ruler beside it, as the window draws it, rather
+/// than an envelope reshaped into decibels.
+const DEFAULT_WAVE_SCALE: &str = "linear";
 
 fn main() -> ExitCode {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("warn")).init();
@@ -171,11 +200,52 @@ fn render(args: &Args) -> Result<()> {
             .clamp(0, 8_000),
     };
     let params = stft_params(args)?;
-    let log = !args.has("linear");
+    if args.has("log") && args.has("linear") {
+        bail!("--log and --linear ask for different axes; pick one");
+    }
+    let log = args.has("log");
     let (db_min, db_max) = db_range(args)?;
-    let contrast = args.get::<f32>("contrast")?.unwrap_or(1.0).clamp(0.25, 4.0);
+    let contrast = args
+        .get::<f32>("contrast")?
+        .unwrap_or(DEFAULT_CONTRAST)
+        .clamp(0.25, 4.0);
     let colormap = colormap(args)?;
-    let scale = wave_scale(args, db_min)?;
+    let scale = wave_scale(args)?;
+    let wave_color = wave_color(args)?;
+    let show_spectrogram = !args.has("no-spectrogram");
+    // Merging only means something when there are two panes to merge.
+    let merge = !args.has("no-merge") && wave_height > 0 && show_spectrogram;
+    // Over a spectrogram, amplitude rather than decibels unless the scale was
+    // asked for by name: a dB envelope is tall nearly everywhere, and drawn on
+    // top it would blot out the picture it is supposed to annotate.
+    let overlay_scale = match (merge, args.str("wave-scale")) {
+        (true, Some(s)) if matches("db", s) || matches("dbfs", s) => scale,
+        (true, _) => WaveScale::Linear {
+            zoom: args
+                .get::<f32>("wave-zoom")?
+                .unwrap_or(1.0)
+                .clamp(1.0, 4096.0),
+        },
+        _ => scale,
+    };
+    let merge_opacity = args
+        .get::<f32>("merge-opacity")?
+        .unwrap_or(DEFAULT_MERGE_WAVE)
+        .clamp(0.05, 1.0);
+    let merge_spec_opacity = args
+        .get::<f32>("merge-spec-opacity")?
+        .unwrap_or(DEFAULT_MERGE_SPEC)
+        .clamp(0.05, 1.0);
+    let spectrum_height = match args.has("spectrum") {
+        true => args
+            .get::<i64>("spectrum-height")?
+            .unwrap_or(150)
+            .clamp(40, 8_000),
+        false => 0,
+    };
+    if !show_spectrogram && wave_height == 0 && spectrum_height == 0 {
+        bail!("nothing left to draw: --no-spectrogram with no waveform and no spectrum");
+    }
     let want_start = args.get::<f64>("start")?.unwrap_or(0.0).max(0.0);
     let want_end = args.get::<f64>("end")?;
     let want_channel = args.get::<usize>("channel")?;
@@ -224,55 +294,99 @@ fn render(args: &Args) -> Result<()> {
     });
 
     let nch = audio.channels.len();
+    let view = ViewTemplate {
+        min_hz,
+        max_hz,
+        log,
+        db_min,
+        db_max,
+    };
+    // The units live in the lane titles. In the margins they would have to
+    // share a line with the topmost tick label, and two bits of text on top of
+    // each other are worse than none.
+    let axis = if log { "Hz, log" } else { "Hz, linear" };
     let mut lanes = Vec::new();
+    let mut spectra: Vec<(String, Spectrum)> = Vec::new();
     for (i, &ch) in channels.iter().enumerate() {
-        note(&format!("spectrogram {}/{}", i + 1, channels.len()));
         let samples = &audio.channels[ch];
         let name = report::channel_name(ch, nch);
-        let image = spectrogram_image(
-            samples,
-            sr,
-            params,
-            start_frame,
-            end_frame,
-            width as usize,
-            height as usize,
-            &ViewTemplate {
-                min_hz,
-                max_hz,
-                log,
-                db_min,
-                db_max,
-            },
-            &lut,
-        )?;
-        // The units live in the lane titles. In the margins they would have
-        // to share a line with the topmost tick label, and two bits of text
-        // on top of each other are worse than none.
-        let axis = if log { "Hz, log" } else { "Hz, linear" };
-        if let Some(p) = &pyramid {
+        let bins = pyramid
+            .as_ref()
+            .map(|p| p.query(ch, samples, start_frame, end_frame, width as usize));
+
+        let drawn = if show_spectrogram || spectrum_height > 0 {
+            note(&format!("spectrogram {}/{}", i + 1, channels.len()));
+            Some(spectrogram_image(
+                samples,
+                sr,
+                params,
+                start_frame,
+                end_frame,
+                width as usize,
+                height as usize,
+                &view,
+                &lut,
+                spectrum_height > 0,
+            )?)
+        } else {
+            None
+        };
+
+        // Merged: one lane, the waveform drawn into the spectrogram. Separate:
+        // the waveform above its spectrogram, each with its own scale.
+        let overlay = match merge {
+            true => bins.clone().map(|bins| Overlay {
+                bins,
+                scale: overlay_scale,
+                opacity: merge_opacity,
+                color: wave_color,
+            }),
+            false => None,
+        };
+        if let (Some(bins), false) = (&bins, merge) {
             lanes.push(Lane::Waveform {
                 title: format!("{name} · {}", scale_name(scale)),
-                bins: p.query(ch, samples, start_frame, end_frame, width as usize),
+                bins: bins.clone(),
                 height: wave_height,
                 scale,
-            });
-            lanes.push(Lane::Spectrogram {
-                title: axis.to_owned(),
-                image,
-                min_hz: min_hz as f64,
-                max_hz: max_hz as f64,
-                log,
-            });
-        } else {
-            lanes.push(Lane::Spectrogram {
-                title: format!("{name} · {axis}"),
-                image,
-                min_hz: min_hz as f64,
-                max_hz: max_hz as f64,
-                log,
+                color: wave_color,
             });
         }
+        if let (true, Some(drawn)) = (show_spectrogram, &drawn) {
+            let title = match (bins.is_some(), merge) {
+                (true, false) => axis.to_owned(),
+                _ => format!("{name} · {axis}"),
+            };
+            lanes.push(Lane::Spectrogram {
+                title,
+                image: drawn.image.clone(),
+                min_hz: min_hz as f64,
+                max_hz: max_hz as f64,
+                log,
+                overlay,
+                opacity: if merge { merge_spec_opacity } else { 1.0 },
+            });
+        }
+        if let Some(s) = drawn.as_ref().and_then(|d| d.spectrum.as_ref()) {
+            spectra.push((name.clone(), s.clone()));
+        }
+    }
+
+    // The spectrum lanes go last, under the shared time axis: their own axis
+    // is frequency, so they cannot sit among the lanes that run along time.
+    for (name, s) in &spectra {
+        lanes.push(Lane::Spectrum {
+            title: format!("{name} · spectrum, {}", if log { "log" } else { "linear" }),
+            average: s.average.clone(),
+            peak: s.peak.clone(),
+            hz_per_bin: s.hz_per_bin,
+            min_hz: min_hz as f64,
+            max_hz: max_hz as f64,
+            log,
+            db_min,
+            db_max,
+            height: spectrum_height,
+        });
     }
 
     let out = output_path(args, &path);
@@ -288,7 +402,9 @@ fn render(args: &Args) -> Result<()> {
             start_secs: start,
             end_secs: end,
             lanes,
-            colorbar: Some(ColorBar {
+            // The bar reads the spectrogram's colours; with no spectrogram
+            // on the plot it would be explaining nothing.
+            colorbar: show_spectrogram.then_some(ColorBar {
                 lut,
                 db_min,
                 db_max,
@@ -311,7 +427,7 @@ fn render(args: &Args) -> Result<()> {
             );
             obj.insert(
                 "analysis".into(),
-                analysis_json(&params, db_min, db_max, contrast, colormap),
+                analysis_json(&params, db_min, db_max, contrast, colormap, merge, scale),
             );
         }
         let path = PathBuf::from(sidecar);
@@ -329,6 +445,24 @@ struct ViewTemplate {
     log: bool,
     db_min: f32,
     db_max: f32,
+}
+
+/// The mean and the maximum level of each FFT bin over the drawn span.
+///
+/// The still-picture answer to the window's realtime spectrum, which has no
+/// meaning without playback. It is read back off the analysis that drew the
+/// spectrogram rather than transformed again, so the two always agree.
+#[derive(Clone)]
+struct Spectrum {
+    average: Vec<f32>,
+    peak: Vec<f32>,
+    hz_per_bin: f64,
+}
+
+/// What one channel contributed to the plot.
+struct Drawn {
+    image: egui::ColorImage,
+    spectrum: Option<Spectrum>,
 }
 
 /// One channel's spectrogram, rendered into the viewport.
@@ -353,12 +487,16 @@ fn spectrogram_image(
     height: usize,
     view: &ViewTemplate,
     lut: &[egui::Color32],
-) -> Result<ColorImage> {
+    want_spectrum: bool,
+) -> Result<Drawn> {
     let pad = params.window_size as f64;
     let slice_start = (start_frame - pad).floor().max(0.0) as usize;
     let slice_end = ((end_frame + pad).ceil().max(0.0) as usize).min(samples.len());
     if slice_start >= slice_end {
-        return Ok(ColorImage::filled([width, height], lut[0]));
+        return Ok(Drawn {
+            image: ColorImage::filled([width, height], lut[0]),
+            spectrum: None,
+        });
     }
     let slice = &samples[slice_start..slice_end];
     let spec = Spectrogram::compute(slice, sample_rate, params, &|_| {}, &|| false)
@@ -368,7 +506,7 @@ fn spectrogram_image(
         end_frame - slice_start as f64,
     );
     let tile = DetailTile::compute(slice, sample_rate, params, from, to, width, &|| false);
-    let view = ViewParams {
+    let params_view = ViewParams {
         start_frame: from,
         end_frame: to,
         min_hz: view.min_hz,
@@ -377,7 +515,41 @@ fn spectrogram_image(
         db_min: view.db_min,
         db_max: view.db_max,
     };
-    Ok(render_view(&spec, tile.as_ref(), &view, width, height, lut))
+    let image = render_view(&spec, tile.as_ref(), &params_view, width, height, lut);
+    let spectrum = want_spectrum.then(|| match tile.as_ref() {
+        // The tile covers exactly the drawn span, one column per pixel, so it
+        // is both the cheapest and the most faithful thing to average.
+        Some(t) => fold_spectrum(t.bins, t.columns, sample_rate, params, |c, b| t.db_at(c, b)),
+        None => fold_spectrum(spec.bins, spec.columns(), sample_rate, params, |c, b| {
+            spec.db_at(c, b)
+        }),
+    });
+    Ok(Drawn { image, spectrum })
+}
+
+/// Walk every column once, keeping a running sum and maximum per bin.
+fn fold_spectrum(
+    bins: usize,
+    columns: usize,
+    sample_rate: u32,
+    params: StftParams,
+    db_at: impl Fn(usize, usize) -> f32,
+) -> Spectrum {
+    let mut sum = vec![0f64; bins];
+    let mut peak = vec![f32::NEG_INFINITY; bins];
+    for c in 0..columns {
+        for b in 0..bins {
+            let db = db_at(c, b);
+            sum[b] += db as f64;
+            peak[b] = peak[b].max(db);
+        }
+    }
+    let n = columns.max(1) as f64;
+    Spectrum {
+        average: sum.iter().map(|s| (s / n) as f32).collect(),
+        peak,
+        hz_per_bin: sample_rate as f64 / params.window_size as f64,
+    }
 }
 
 /// `--no-axes`: the spectrograms alone, stacked, with nothing added.
@@ -386,7 +558,7 @@ fn stack(lanes: &[Lane]) -> ColorImage {
         .iter()
         .filter_map(|l| match l {
             Lane::Spectrogram { image, .. } => Some(image),
-            Lane::Waveform { .. } => None,
+            _ => None,
         })
         .collect();
     let w = images.iter().map(|i| i.width()).max().unwrap_or(1);
@@ -474,8 +646,12 @@ fn analysis_json(
     db_max: f32,
     contrast: f32,
     colormap: ColorMap,
+    merged: bool,
+    scale: WaveScale,
 ) -> Value {
     json!({
+        "merged": merged,
+        "waveform_scale": scale_name(scale),
         "window_size": params.window_size,
         "window": params.window.name(),
         "overlap": format!("{}/{}", params.overlap_num, params.overlap_den),
@@ -557,7 +733,7 @@ fn parse_overlap(spec: &str) -> Result<(u8, u8)> {
 
 fn db_range(args: &Args) -> Result<(f32, f32)> {
     let Some(spec) = args.str("db") else {
-        return Ok((-90.0, 0.0));
+        return Ok((DEFAULT_DB_FLOOR, DEFAULT_DB_CEILING));
     };
     let (lo, hi) = spec
         .split_once(':')
@@ -576,7 +752,7 @@ fn db_range(args: &Args) -> Result<(f32, f32)> {
 
 fn colormap(args: &Args) -> Result<ColorMap> {
     let Some(name) = args.str("colormap") else {
-        return Ok(ColorMap::Amber);
+        return Ok(DEFAULT_COLORMAP);
     };
     ColorMap::ALL
         .into_iter()
@@ -595,19 +771,59 @@ fn colormap(args: &Args) -> Result<ColorMap> {
         })
 }
 
-fn scale_name(scale: WaveScale) -> &'static str {
+fn scale_name(scale: WaveScale) -> String {
     match scale {
-        WaveScale::Db { .. } => "dBFS",
-        WaveScale::Linear => "amplitude",
+        WaveScale::Db { floor } => format!("dBFS to {floor:.0}"),
+        WaveScale::Linear { zoom } if zoom > 1.0 => format!("amplitude x{zoom:.0}"),
+        WaveScale::Linear { .. } => "amplitude".into(),
     }
 }
 
-fn wave_scale(args: &Args, db_min: f32) -> Result<WaveScale> {
-    match args.str("wave-scale").unwrap_or("db") {
-        s if matches("db", s) || matches("dbfs", s) => Ok(WaveScale::Db { floor: db_min }),
-        s if matches("linear", s) => Ok(WaveScale::Linear),
+/// How the waveform lane is scaled.
+///
+/// Decibels by default, which is not what the window does: on screen a
+/// vertical zoom and a scroll wheel find a noise floor in a second, and a still
+/// picture has neither. `--wave-scale linear` puts the window's behaviour back,
+/// with `--wave-zoom` standing in for the wheel.
+fn wave_scale(args: &Args) -> Result<WaveScale> {
+    let zoom = args
+        .get::<f32>("wave-zoom")?
+        .unwrap_or(1.0)
+        .clamp(1.0, 4096.0);
+    let floor = args.get::<f32>("wave-db")?.unwrap_or(-90.0);
+    if floor >= 0.0 {
+        bail!("--wave-db {floor}: a floor below full scale, like -90");
+    }
+    match args.str("wave-scale").unwrap_or(DEFAULT_WAVE_SCALE) {
+        s if matches("db", s) || matches("dbfs", s) => Ok(WaveScale::Db { floor }),
+        s if matches("linear", s) => Ok(WaveScale::Linear { zoom }),
         other => bail!("--wave-scale {other:?}: db or linear"),
     }
+}
+
+/// The waveform's colour, as `#rrggbb` or `r,g,b`.
+fn wave_color(args: &Args) -> Result<egui::Color32> {
+    let Some(spec) = args.str("wave-color") else {
+        return Ok(Theme::default().wave);
+    };
+    let bad = || anyhow!("--wave-color {spec:?}: #rrggbb or r,g,b");
+    if let Some(hex) = spec.strip_prefix('#') {
+        if hex.len() != 6 {
+            return Err(bad());
+        }
+        let byte = |i: usize| u8::from_str_radix(&hex[i..i + 2], 16).map_err(|_| bad());
+        return Ok(egui::Color32::from_rgb(byte(0)?, byte(2)?, byte(4)?));
+    }
+    let parts: Vec<&str> = spec.split(',').collect();
+    if parts.len() != 3 {
+        return Err(bad());
+    }
+    let byte = |s: &str| s.trim().parse::<u8>().map_err(|_| bad());
+    Ok(egui::Color32::from_rgb(
+        byte(parts[0])?,
+        byte(parts[1])?,
+        byte(parts[2])?,
+    ))
 }
 
 /// Names are matched the way someone would type them: case does not count,
@@ -700,7 +916,10 @@ mod tests {
             db_range(&args(&["--db", "-60:-10"])).unwrap(),
             (-60.0, -10.0)
         );
-        assert_eq!(db_range(&args(&[])).unwrap(), (-90.0, 0.0));
+        assert_eq!(
+            db_range(&args(&[])).unwrap(),
+            (DEFAULT_DB_FLOOR, DEFAULT_DB_CEILING)
+        );
         assert!(db_range(&args(&["--db", "0:-90"])).is_err());
         assert!(db_range(&args(&["--db", "-90"])).is_err());
     }

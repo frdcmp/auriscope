@@ -115,6 +115,13 @@ auriscope-cli render take.wav -o take.png
 auriscope-cli render take.wav --start 3.44 --end 3.62 --window 1024 -o click.png
 ```
 
+### What a render opens on
+
+The defaults are the view the window is usually left sitting on: the waveform over the
+spectrogram as one pane, a **linear** frequency axis, Inferno, and a `-115:-9` dB colour
+range — wide enough at the quiet end to show a room tone without the loud end burning out.
+Every one of them has a flag: `--no-merge`, `--log`, `--colormap`, `--db`.
+
 ### What is drawn
 
 One channel per pair of lanes — a waveform above, a spectrogram below — stacked down the
@@ -122,11 +129,44 @@ image, all sharing one time axis whose gridlines line up across every lane.
 
 - **Time** runs left to right, labelled in seconds, or `m:ss` once the span passes a
   minute. The unit is written under the last tick.
-- **Frequency** runs bottom to top, logarithmic from 20 Hz by default. The lane title says
-  which (`Hz, log` or `Hz, linear`).
+- **Frequency** runs bottom to top, linear by default. The lane title says which
+  (`Hz, linear` or `Hz, log`).
 - **Level** is the colour, with the bar down the right mapping colour to decibels.
-- **The waveform lane is on a decibel scale by default** (lane title `· dBFS`), peak span
-  in one colour with RMS drawn inside it. `--wave-scale linear` switches to amplitude.
+- **The waveform is drawn over the spectrogram by default**, as one pane, which is the
+  window's merged view. `--no-merge` puts it in a lane of its own above.
+- **The waveform is amplitude with a decibel ruler**, peak span in one colour with RMS
+  inside it, the way the window draws it. At the default `--wave-zoom 1` the lane is
+  exactly full scale: **0 dBFS is the top edge**, labelled `0`, with no dead air above it.
+- In a merged pane that ruler sits **inside the lane on the right**, because the frequency
+  axis owns the left margin and two rulers in one margin land on top of each other.
+
+### The other two panes
+
+Merging is the default; `--no-merge` splits the two apart. The overlay stays on the
+**linear** scale unless `--wave-scale db` says otherwise: a decibel envelope is tall nearly
+everywhere, and drawn on top it would blot out the picture it is meant to annotate.
+`--merge-opacity` and `--merge-spec-opacity` balance the two — the defaults draw the
+waveform fully and dim the spectrogram to make room for it, rather than the other way
+round.
+
+`--spectrum` adds a pane whose horizontal axis is **frequency**, not time: the mean level
+of every FFT bin across the drawn span as a filled trace, with the loudest each bin ever
+reached as a line above it. It is the still-picture answer to the window's realtime
+spectrum, which has no meaning with nothing playing. It is read back off the same analysis
+that drew the spectrogram, so the two always agree — and its resolution at the low end
+follows `--window`: at 2048 and 48 kHz the bins are 23 Hz apart, so everything below about
+100 Hz is four bins wide and looks like a staircase. Lengthen the window to smooth it.
+
+Because its axis is frequency, the spectrum pane sits *below* the shared time axis with an
+axis of its own, rather than among the lanes that run along time.
+
+### Vertical zoom
+
+`--wave-zoom` is the window's vertical zoom, and it does the same thing: multiply the
+amplitude and clip at the edge of the lane, from 1 to 4096 (about 72 dB). It applies to the
+linear scale only — the decibel scale already shows the whole range, which is why it is the
+default here. The decibel rulings on a zoomed linear lane move with the zoom, so the labels
+keep saying what the levels are rather than just getting bigger.
 
 Only the visible span is analysed, padded by one window on each side so the edges of a
 zoom are not darkened by the analysis running off the end of the slice. Within the span
@@ -185,17 +225,26 @@ Common:
 | `--height PX` | 340 | each spectrogram lane |
 | `--wave-height PX` | 90 | each waveform lane; `0` drops them |
 | `--no-waveform` | off | same as `--wave-height 0` |
-| `--wave-scale db\|linear` | `db` | decibel or amplitude waveform |
+| `--no-spectrogram` | off | waveform and/or spectrum only |
+| `--no-merge` | off | waveform *above* the spectrogram instead of over it |
+| `--merge-opacity F` | 1.0 | how strongly the overlaid waveform is drawn |
+| `--merge-spec-opacity F` | 0.55 | how much of the spectrogram shows through it |
+| `--spectrum` | off | add a level-against-frequency pane for the whole span |
+| `--spectrum-height PX` | 150 | how tall it is |
+| `--wave-scale linear\|db` | `linear` | amplitude with a dB ruler, or an envelope reshaped into dB |
+| `--wave-zoom F` | 1 | vertical zoom for the linear scale, 1 to 4096 |
+| `--wave-db FLOOR` | −90 | bottom of the dB waveform, independent of `--db` |
+| `--wave-color C` | blue | `#rrggbb` or `r,g,b` |
 | `--window N` | 2048 | 256, 512, 1024, 2048, 4096, 8192, 16384 |
 | `--overlap PCT` | 75 | `75`, `75%` or `3/4` |
 | `--window-fn NAME` | `hann` | `hann` `hamming` `blackman` `blackman-harris` `rectangular` |
 | `--reassign` | off | time–frequency reassignment: thin lines, single-column clicks. Slower |
-| `--db MIN:MAX` | `-90:0` | decibels mapped across the colour map |
-| `--contrast F` | 1.0 | gamma on the level before colouring, 0.25 to 4 |
-| `--colormap NAME` | `amber` | `amber` `ember` `magma` `inferno` `viridis` `plasma` `turbo` `grey` |
-| `--min-hz HZ` | 20 log, 0 linear | bottom of the frequency axis |
+| `--db MIN:MAX` | `-115:-9` | decibels mapped across the colour map |
+| `--contrast F` | 0.92 | gamma on the level before colouring, 0.25 to 4 |
+| `--colormap NAME` | `inferno` | `amber` `ember` `magma` `inferno` `viridis` `plasma` `turbo` `grey` |
+| `--min-hz HZ` | 0 linear, 20 log | bottom of the frequency axis |
 | `--max-hz HZ` | Nyquist | top of it |
-| `--linear` | off | linear frequency axis |
+| `--log` | off | logarithmic frequency axis instead of linear |
 | `--no-axes` | off | the bare spectrogram at exactly `--width` × `--height`, no margins |
 | `--json PATH` | | the report, with the framing |
 
