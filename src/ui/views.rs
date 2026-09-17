@@ -988,14 +988,7 @@ fn draw_splitter(p: &egui::Painter, rect: Rect, active: bool) {
 /// The channel's name in full, for the places with room for it. A bare "L"
 /// beside a Mute/Solo pair reads as one more letter in a row of letters,
 /// especially with an RMS row underneath.
-pub fn channel_name(ch: usize, nch: usize) -> String {
-    match (nch, ch) {
-        (1, _) => "Mono".into(),
-        (2, 0) => "Left".into(),
-        (2, 1) => "Right".into(),
-        _ => format!("Channel {}", ch + 1),
-    }
-}
+pub use auriscope::report::channel_name;
 
 pub fn channel_label(ch: usize, nch: usize) -> String {
     match (nch, ch) {

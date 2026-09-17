@@ -984,7 +984,7 @@ impl App {
                 // The grab is of the whole window; only the views are kept.
                 let views = capture::crop(&img, views, ctx.pixels_per_point());
                 let json = capture::json_path(&path);
-                let written = capture::write_png(&path, &views)
+                let written = auriscope::plot::write_png(&path, &views)
                     .and_then(|()| capture::write_json(&json, &capture::metadata(self, &path)));
                 match written {
                     Ok(()) => {
@@ -1238,7 +1238,7 @@ fn write_dev_shot(path: &Path, img: &egui::ColorImage) -> anyhow::Result<()> {
         write_ppm(path, img)?;
         return Ok(());
     }
-    capture::write_png(path, img)
+    auriscope::plot::write_png(path, img)
 }
 
 fn write_ppm(path: &Path, img: &egui::ColorImage) -> std::io::Result<()> {

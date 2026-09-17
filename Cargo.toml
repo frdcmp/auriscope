@@ -6,6 +6,8 @@ rust-version = "1.98"
 description = "An audio player and analyser: waveform, spectrogram and realtime spectrum."
 repository = "https://github.com/frdcmp/auriscope"
 license = "GPL-3.0-or-later"
+# Two binaries, so `cargo run` has to be told which one is the app.
+default-run = "auriscope"
 
 [lib]
 name = "auriscope"
@@ -15,8 +17,19 @@ path = "src/lib.rs"
 name = "auriscope"
 path = "src/main.rs"
 
+# The same analysis without a window: JSON and annotated PNGs for scripts and
+# for machine readers. A separate binary rather than a subcommand of the first
+# one, because the window binary has no console attached on Windows and a tool
+# whose whole output is on stdout needs one.
+[[bin]]
+name = "auriscope-cli"
+path = "src/cli/main.rs"
+
 [dependencies]
-eframe = { version = "0.36", default-features = false, features = ["default_fonts", "wgpu", "wayland", "x11", "persistence"] }
+# `links` is what makes a clicked hyperlink actually reach the browser: without
+# it egui-winit swallows the open-url request and only logs a warning. It is an
+# eframe default, so turning the defaults off takes it away too.
+eframe = { version = "0.36", default-features = false, features = ["default_fonts", "links", "wgpu", "wayland", "x11", "persistence"] }
 egui = "0.36"
 symphonia = { version = "0.6", default-features = false, features = [
     "wav", "aiff", "caf", "flac", "alac", "ape", "pcm", "adpcm",

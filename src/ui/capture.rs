@@ -27,9 +27,8 @@ use anyhow::{Context, Result};
 use eframe::egui;
 use serde_json::{Value, json};
 
-use auriscope::analysis::WindowKind;
+use auriscope::report::{self, rounded};
 
-use super::views::channel_name;
 use super::{App, update};
 
 /// A picture on its way to disk, one frame per beat.
@@ -83,33 +82,6 @@ pub fn with_png_extension(path: PathBuf) -> PathBuf {
     }
 }
 
-/// Write a captured frame out as a PNG.
-///
-/// Three channels, not four: the window is opaque, so the alpha carries no
-/// information, and a viewer that reads it differently cannot turn the picture
-/// blank. egui's pixels are premultiplied, which at full alpha is the same
-/// bytes anyway.
-pub fn write_png(path: &Path, img: &egui::ColorImage) -> Result<()> {
-    let file =
-        std::fs::File::create(path).with_context(|| format!("creating {}", path.display()))?;
-    let mut encoder = png::Encoder::new(
-        std::io::BufWriter::new(file),
-        img.width() as u32,
-        img.height() as u32,
-    );
-    encoder.set_color(png::ColorType::Rgb);
-    encoder.set_depth(png::BitDepth::Eight);
-    let mut rgb = Vec::with_capacity(img.pixels.len() * 3);
-    for px in &img.pixels {
-        rgb.extend_from_slice(&[px.r(), px.g(), px.b()]);
-    }
-    encoder
-        .write_header()
-        .and_then(|mut w| w.write_image_data(&rgb))
-        .with_context(|| format!("writing {}", path.display()))?;
-    Ok(())
-}
-
 /// Where the metadata goes: the picture's name with `.json` on it, so the two
 /// travel together and neither has to be looked up from the other.
 pub fn json_path(png: &Path) -> PathBuf {
@@ -150,184 +122,25 @@ pub fn write_json(path: &Path, value: &Value) -> Result<()> {
 /// to it was framed: what the file is, what its header holds, what it measures,
 /// and the analysis and view the capture was taken through.
 pub fn metadata(app: &App, image: &Path) -> Value {
+    let info = app.audio.as_ref().map(|a| &a.info);
+    let block = |f: fn(&auriscope::audio::FileInfo) -> Value| info.map_or(Value::Null, f);
     json!({
         "auriscope": {
             "version": update::CURRENT,
             "captured_unix": update::unix_now(),
             "image": image.file_name().map(|n| n.to_string_lossy().into_owned()),
         },
-        "file": file_json(app),
-        "wave": wave_json(app),
-        "broadcast_wave": bext_json(app),
-        "markers": markers_json(app),
-        "loudness": loudness_json(app),
-        "channels": channels_json(app),
+        "file": block(report::file_json),
+        "wave": block(report::wave_json),
+        "broadcast_wave": block(report::bext_json),
+        "markers": block(report::markers_json),
+        "loudness": report::loudness_json(app.stats.as_ref()),
+        // The window is the only caller that knows about muting, so it is the
+        // only one whose channels say whether they were.
+        "channels": report::channels_json(app.stats.as_ref(), &|i| Some(app.channel_muted(i))),
         "view": view_json(app),
         "analysis": analysis_json(app),
     })
-}
-
-fn file_json(app: &App) -> Value {
-    let Some(info) = app.audio.as_ref().map(|a| &a.info) else {
-        return Value::Null;
-    };
-    json!({
-        "name": info.file_name(),
-        "path": info.path.display().to_string(),
-        "container": info.container,
-        "codec": info.codec,
-        "sample_rate_hz": info.sample_rate,
-        "channels": info.channels,
-        "bits_per_sample": info.bits_per_sample,
-        "frames": info.frames,
-        "duration_secs": rounded(info.duration_secs() as f32, 6),
-        "size_bytes": info.file_size,
-        "modified_unix": info.modified.and_then(|t| {
-            t.duration_since(std::time::UNIX_EPOCH).ok().map(|d| d.as_secs())
-        }),
-        "tags": info
-            .tags
-            .iter()
-            .map(|(k, v)| json!({ "name": k, "value": v }))
-            .collect::<Vec<_>>(),
-    })
-}
-
-fn wave_json(app: &App) -> Value {
-    let Some(wav) = app.audio.as_ref().and_then(|a| a.info.wav.as_ref()) else {
-        return Value::Null;
-    };
-    let fmt = wav.fmt.as_ref().map(|f| {
-        json!({
-            "format": f.format_name(),
-            "format_tag": f.effective_tag(),
-            "extensible": f.is_extensible(),
-            "channels": f.channels,
-            "sample_rate_hz": f.sample_rate,
-            "byte_rate": f.byte_rate,
-            "block_align": f.block_align,
-            "bits_per_sample": f.bits_per_sample,
-            "valid_bits": f.valid_bits,
-            "channel_mask": f.channel_mask,
-        })
-    });
-    json!({
-        "rf64": wav.rf64,
-        "riff_size": wav.riff_size,
-        "fmt": fmt,
-        "info": wav
-            .info
-            .iter()
-            .map(|(k, v)| json!({ "name": k, "value": v }))
-            .collect::<Vec<_>>(),
-        "chunks": wav
-            .chunks
-            .iter()
-            .map(|c| json!({ "id": c.id, "size": c.size, "offset": c.offset }))
-            .collect::<Vec<_>>(),
-    })
-}
-
-fn bext_json(app: &App) -> Value {
-    let Some(bext) = app
-        .audio
-        .as_ref()
-        .and_then(|a| a.info.wav.as_ref())
-        .and_then(|w| w.bext.as_ref())
-    else {
-        return Value::Null;
-    };
-    json!({
-        "description": bext.description,
-        "originator": bext.originator,
-        "originator_reference": bext.originator_reference,
-        "origination_date": bext.origination_date,
-        "origination_time": bext.origination_time,
-        "time_reference_samples": bext.time_reference,
-        "version": bext.version,
-        "umid": bext.umid,
-        "coding_history": bext.coding_history,
-        "loudness": bext.loudness.map(|l| json!({
-            "integrated_lufs": rounded(l.integrated_lufs, 2),
-            "range_lu": rounded(l.range_lu, 2),
-            "max_true_peak_dbtp": rounded(l.max_true_peak_dbtp, 2),
-            "max_momentary_lufs": rounded(l.max_momentary_lufs, 2),
-            "max_short_term_lufs": rounded(l.max_short_term_lufs, 2),
-        })),
-    })
-}
-
-fn markers_json(app: &App) -> Value {
-    let Some(audio) = &app.audio else {
-        return Value::Null;
-    };
-    let Some(wav) = audio.info.wav.as_ref() else {
-        return Value::Null;
-    };
-    let sr = audio.info.sample_rate.max(1) as f64;
-    json!(
-        wav.cues
-            .iter()
-            .map(|c| json!({
-                "id": c.id,
-                "position_frames": c.position,
-                "position_secs": (c.position as f64 / sr),
-                "label": c.label,
-            }))
-            .collect::<Vec<_>>()
-    )
-}
-
-fn loudness_json(app: &App) -> Value {
-    let Some(stats) = &app.stats else {
-        return Value::Null;
-    };
-    let fold = |f: fn(&auriscope::analysis::ChannelStats) -> f32| {
-        stats
-            .channels
-            .iter()
-            .map(f)
-            .fold(f32::NEG_INFINITY, f32::max)
-    };
-    let true_peak = fold(|c| c.true_peak_dbtp);
-    let peak = fold(|c| c.sample_peak_db);
-    let rms = fold(|c| c.rms_db);
-    json!({
-        "integrated_lufs": rounded(stats.integrated_lufs, 2),
-        "range_lu": rounded(stats.loudness_range_lu, 2),
-        "max_momentary_lufs": rounded(stats.max_momentary_lufs, 2),
-        "max_short_term_lufs": rounded(stats.max_short_term_lufs, 2),
-        "correlation": stats.correlation.map(|c| rounded(c, 3)),
-        // The two the Loudness card works out for itself, so a reader of the
-        // JSON does not have to know how they were arrived at.
-        "headroom_db": rounded(-true_peak, 2),
-        "crest_factor_db": rounded(peak - rms, 2),
-    })
-}
-
-fn channels_json(app: &App) -> Value {
-    let Some(stats) = &app.stats else {
-        return Value::Null;
-    };
-    let nch = stats.channels.len();
-    json!(
-        stats
-            .channels
-            .iter()
-            .enumerate()
-            .map(|(i, c)| json!({
-                "index": i,
-                "name": channel_name(i, nch),
-                "sample_peak_dbfs": rounded(c.sample_peak_db, 2),
-                "true_peak_dbtp": rounded(c.true_peak_dbtp, 2),
-                "rms_dbfs": rounded(c.rms_db, 2),
-                "dc_offset": rounded(c.dc_offset, 6),
-                "clipped_samples": c.clipped_samples,
-                "clipped_runs": c.clipped_runs,
-                "muted": app.channel_muted(i),
-            }))
-            .collect::<Vec<_>>()
-    )
 }
 
 /// What the picture actually shows: the span of the file drawn across it, and
@@ -364,7 +177,7 @@ fn analysis_json(app: &App) -> Value {
     let stft = &s.stft;
     json!({
         "window_size": stft.window_size,
-        "window": window_name(stft.window),
+        "window": stft.window.name(),
         "overlap": format!("{}/{}", stft.overlap_num, stft.overlap_den),
         "hop": stft.hop(),
         "reassigned": stft.reassign,
@@ -383,27 +196,6 @@ fn analysis_json(app: &App) -> Value {
     })
 }
 
-fn window_name(kind: WindowKind) -> &'static str {
-    match kind {
-        WindowKind::Rectangular => "Rectangular",
-        WindowKind::Hann => "Hann",
-        WindowKind::Hamming => "Hamming",
-        WindowKind::Blackman => "Blackman",
-        WindowKind::BlackmanHarris => "Blackman-Harris",
-    }
-}
-
-/// A number for JSON, which has no infinity: `null` where a measurement has
-/// none — a silent file integrates to −inf LUFS — and otherwise the value at
-/// the precision it is read at, rather than whatever an f32 widens to.
-fn rounded(v: f32, places: i32) -> Value {
-    if !v.is_finite() {
-        return Value::Null;
-    }
-    let f = 10f64.powi(places);
-    json!(((v as f64) * f).round() / f)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -415,34 +207,6 @@ mod tests {
             "scene 4 take 02.png"
         );
         assert_eq!(default_name(None), "auriscope.png");
-    }
-
-    /// The bytes on disk are a PNG anything else can open, at the size and
-    /// the colours that went in.
-    #[test]
-    fn png_round_trips() {
-        let path =
-            std::env::temp_dir().join(format!("auriscope-capture-{}.png", std::process::id()));
-        let pixels = vec![
-            egui::Color32::from_rgb(10, 20, 30),
-            egui::Color32::from_rgb(200, 100, 50),
-            egui::Color32::BLACK,
-            egui::Color32::WHITE,
-        ];
-        let img = egui::ColorImage::new([2, 2], pixels.clone());
-        write_png(&path, &img).expect("write");
-
-        let file = std::io::BufReader::new(std::fs::File::open(&path).expect("open"));
-        let decoder = png::Decoder::new(file);
-        let mut reader = decoder.read_info().expect("header");
-        let mut buf = vec![0; reader.output_buffer_size().expect("size")];
-        let info = reader.next_frame(&mut buf).expect("frame");
-        std::fs::remove_file(&path).ok();
-
-        assert_eq!((info.width, info.height), (2, 2));
-        assert_eq!(info.color_type, png::ColorType::Rgb);
-        let want: Vec<u8> = pixels.iter().flat_map(|p| [p.r(), p.g(), p.b()]).collect();
-        assert_eq!(&buf[..info.buffer_size()], &want[..]);
     }
 
     /// The crop is in points against an image in pixels, and a region that

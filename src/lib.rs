@@ -5,3 +5,5 @@
 
 pub mod analysis;
 pub mod audio;
+pub mod plot;
+pub mod report;

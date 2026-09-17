@@ -92,6 +92,7 @@ WAV resolves to more than one MIME type. If a file still opens elsewhere, run `g
 | 📊 | **Delivery checks** | Integrated, short-term and momentary LUFS, loudness range and true peak (EBU R128). Clipped sample counts and run counts. Per channel: sample peak, true peak, RMS, DC offset. Stereo phase correlation. |
 | 🎛️ | **A real player** | Sample-accurate click-to-seek, drag-to-select with loop regions, gain and pan, per-channel mute and solo, keyboard navigation. Clicking a channel's name in **Levels** picks it out: drawn full height and played out of both speakers, the way that channel would look and sound imported as a mono file. Whatever you are not hearing is dimmed wherever it appears — waveform, spectrogram and its own strip of meters. Opens by double-click, drag-and-drop, `Ctrl+O` or a command-line argument, and a **Recent** menu beside the Open button reopens the last dozen files. |
 | 📸 | **Capture what you see** | The camera beside the settings button saves the waveform, spectrogram and spectrum as a PNG — just the views, without the bars and the sidebar around them — and writes a `.json` of the same name beside it holding everything the side panel says: the file, the WAVE header, Broadcast Wave, tags, markers, loudness, per-channel levels, and the analysis and time range the picture was taken through. `Ctrl+Shift+S`. |
+| 🤖 | **A command line** | `auriscope-cli` is the same analysis with no window: `analyze` writes that JSON for any file on stdout, and `render` writes an annotated PNG of the waveform and spectrogram over any time range, with time, frequency and decibel axes drawn around it. For scripts, for a box with no display, and for handing a picture of a file to something that reads pictures. [More below](#-command-line). |
 | ⚙️ | **One settings dialog** | `Ctrl+,` holds every view control. Show or hide each pane on its own, and a hidden pane gives its space to the others. Or merge the waveform over the spectrogram in one strip, each with its own opacity. |
 | 🗂️ | **A side panel worth reading** | Cards for the file, the WAVE header, Broadcast Wave metadata, tags, cue markers, loudness, per-channel levels, the live analysis parameters and the cursor. |
 | 🔒 | **Read-only by design** | Auriscope never writes to your audio. Your settings persist between runs; your files do not change. The list of files you have opened stays on your machine, and Settings → Files switches it off or clears it. |
@@ -216,6 +217,57 @@ Text is set in [JetBrains Mono Nerd Font](https://www.nerdfonts.com/), bundled: 
 | `Ctrl+Shift+S` | Save the views as PNG + JSON | | | |
 
 Selection works the way a DAW's does. Dragging highlights a region and also sets a range on the time ruler, shown as a band with a handle at each end. The next click clears the highlight but leaves the range, so you can seek around inside it. The band turns green while looping. Vertical zoom runs from 1x to 4096x, about 72 dB, which is enough to lift a noise floor to full height. At 1x the strip is exactly full scale: 0 dBFS sits on the top edge, with no dead air above it.
+
+---
+
+## 🤖 Command line
+
+The window is one way in. `auriscope-cli` is the other: the same decoding, the same
+STFT, the same loudness pass, with nothing on screen.
+
+```bash
+# Everything the side panel knows, as JSON on stdout
+auriscope-cli analyze take.wav | jq .loudness
+
+# The waveform and spectrogram as a PNG, with axes drawn around them
+auriscope-cli render take.wav -o take.png
+
+# A tenth of a second around a suspected edit, at a shorter window
+auriscope-cli render take.wav --start 3.44 --end 3.62 --window 1024 -o click.png
+```
+
+`analyze` writes the same blocks as the capture sidecar — file, WAVE header, Broadcast
+Wave, tags, markers, loudness, per-channel levels — so one reader handles both.
+
+`render` draws a waveform lane and a spectrogram lane per channel. The waveform is on a
+**decibel** scale by default rather than a linear one, because that is what makes a noise
+floor, a room tone and the gap between two takes visible at all; `--wave-scale linear`
+gives the familiar shape back. `--json out.json` writes the report beside the picture
+with the framing added: the time range, the frequency range, and what one pixel is worth,
+so anything spotted in the image can be turned back into a position in the file.
+
+The axes are the point. A bare spectrogram shows that something happened without saying
+when or at what frequency, which is no use to a reader who cannot click on it — a note
+weeks later, a batch report, or a model asked what is wrong with a file.
+
+<details>
+<summary><b>Options</b></summary>
+
+| Option | |
+| :--- | :--- |
+| `--start` `--end` | Seconds. Only the visible span is analysed, so a zoomed render of a long file is quick. |
+| `--width` `--height` `--wave-height` | Pixels. Height is per lane; `--wave-height 0` or `--no-waveform` drops the waveform. |
+| `--channel N` | One channel, counting from 0. The default draws them all, stacked. |
+| `--window` `--overlap` `--window-fn` `--reassign` | The STFT, as in the settings dialog. Overlap takes `75`, `75%` or `3/4`. |
+| `--db MIN:MAX` `--contrast` `--colormap` | Colour mapping, as in the settings dialog. |
+| `--min-hz` `--max-hz` `--linear` | The frequency axis. Logarithmic from 20 Hz by default. |
+| `--no-axes` | The bare spectrogram, no margins and no labels, for feeding somewhere else. |
+| `--quiet` | No progress on stderr. Errors still go there; JSON only ever goes to stdout. |
+
+Zooming in re-transforms the visible range at one analysis column per pixel column, the
+same way the window does, so a short span is as sharp as the window length allows.
+
+</details>
 
 ---
 
