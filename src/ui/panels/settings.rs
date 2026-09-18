@@ -94,6 +94,7 @@ pub fn settings_window(app: &mut App, ctx: &egui::Context) {
                 spectrogram_card(app, ui);
                 waveform_card(app, ui);
                 spectrum_card(app, ui);
+                playback_card(app, ui);
                 files_card(app, ui);
                 keys_card(ui);
                 about_card(app, ui);
@@ -491,6 +492,32 @@ fn spectrum_card(app: &mut App, ui: &mut egui::Ui) {
                             .fixed_decimals(2),
                     );
                 });
+                setting(ui, "Colour", Some(Topic::SpectrumColour), |ui| {
+                    ui.color_edit_button_srgb(&mut app.settings.spectrum_color);
+                    const SWATCHES: [([u8; 3], &str); 5] = [
+                        (crate::ui::DEFAULT_SPECTRUM_COLOR, "Blue"),
+                        ([235, 235, 235], "White"),
+                        ([120, 220, 140], "Green"),
+                        ([247, 198, 72], "Amber"),
+                        ([230, 120, 200], "Pink"),
+                    ];
+                    for (rgb, name) in SWATCHES {
+                        let c = Color32::from_rgb(rgb[0], rgb[1], rgb[2]);
+                        let (rect, resp) = ui.allocate_exact_size(vec2(16.0, 16.0), Sense::click());
+                        ui.painter().rect_filled(rect, 3.0, c);
+                        if app.settings.spectrum_color == rgb {
+                            ui.painter().rect_stroke(
+                                rect,
+                                3.0,
+                                Stroke::new(1.5, Color32::WHITE),
+                                egui::StrokeKind::Outside,
+                            );
+                        }
+                        if resp.on_hover_text(name).clicked() {
+                            app.settings.spectrum_color = rgb;
+                        }
+                    }
+                });
             });
             if size != app.settings.spectrum_size {
                 app.settings.spectrum_size = size;
@@ -498,6 +525,67 @@ fn spectrum_card(app: &mut App, ui: &mut egui::Ui) {
                     app.live = Some(auriscope::analysis::LiveSpectrum::new(size, e.device_rate));
                 }
             }
+        },
+    );
+}
+
+/// Vertical rhythm of a card that is a column of checkboxes rather than a
+/// grid: tighter than a settings row, since each line is one box and its own
+/// words with no label column to line up against.
+const CHECK_GAP: f32 = 7.0;
+/// How far a checkbox that qualifies the one above it is indented, so the
+/// pair reads as a setting and its exception.
+const SUB_INDENT: f32 = 22.0;
+
+/// The playback card: preferences the transport acts on by itself. No label
+/// column — each row is a checkbox whose own words say what it does.
+fn playback_card(app: &mut App, ui: &mut egui::Ui) {
+    wide_card(
+        ui,
+        fonts::icon::PLAY,
+        "Playback",
+        Topic::PlaybackCard,
+        None,
+        |ui| {
+            ui.spacing_mut().item_spacing.y = CHECK_GAP;
+            let r = ui.checkbox(&mut app.settings.autoplay, "Play as soon as a file opens");
+            help::offer_response(ui, &r, Topic::Autoplay);
+            // Hangs off the box above, so it is indented under it and greys
+            // out with it.
+            ui.horizontal(|ui| {
+                ui.add_space(SUB_INDENT);
+                let r = ui.add_enabled(
+                    app.settings.autoplay,
+                    egui::Checkbox::new(
+                        &mut app.settings.autoplay_startup,
+                        "Including the file reopened at startup",
+                    ),
+                );
+                help::offer_response(ui, &r, Topic::AutoplayStartup);
+            });
+            let r = ui.checkbox(
+                &mut app.settings.rewind_at_end,
+                "Return to the start when a file plays out",
+            );
+            help::offer_response(ui, &r, Topic::RewindAtEnd);
+            let r = ui.checkbox(
+                &mut app.settings.stop_to_play_start,
+                "Stop goes back to where playback started",
+            );
+            help::offer_response(ui, &r, Topic::StopPosition);
+            let r = ui.checkbox(
+                &mut app.settings.reset_levels_on_open,
+                "Reset gain and pan when a file opens",
+            );
+            help::offer_response(ui, &r, Topic::ResetLevels);
+            // The transport bar's Follow box: one field, reached either from
+            // the bar mid-listen or from here among the rest of the playback
+            // preferences.
+            let r = ui.checkbox(
+                &mut app.settings.follow_playhead,
+                "Follow the playhead while playing",
+            );
+            help::offer_response(ui, &r, Topic::FollowPlayhead);
         },
     );
 }
@@ -616,7 +704,7 @@ fn files_card(app: &mut App, ui: &mut egui::Ui) {
 fn keys_card(ui: &mut egui::Ui) {
     wide_card(ui, fonts::icon::INFO, "Keys", Topic::KeysCard, None, |ui| {
         const KEYS: [(&str, &str); 20] = [
-            ("Space", "play / pause"),
+            ("Space", "play / stop"),
             ("Ctrl+O", "open a file"),
             ("Ctrl+,", "settings"),
             ("F1", "help mode: hover a label to read what it means"),

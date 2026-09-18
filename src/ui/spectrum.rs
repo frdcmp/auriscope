@@ -11,6 +11,14 @@ const MIN_HZ: f32 = 20.0;
 const DB_TOP: f32 = 0.0;
 const DB_BOTTOM: f32 = -100.0;
 
+/// Peak-hold line: the curve colour dimmed, so it reads as a ghost of the
+/// live curve rather than a second signal in its own right. Opaque, so it
+/// stays visible where it crosses a grid line.
+fn peak_color(base: Color32) -> Color32 {
+    let dim = |v: u8| (v as u16 * 3 / 5) as u8;
+    Color32::from_rgb(dim(base.r()), dim(base.g()), dim(base.b()))
+}
+
 /// Draw the realtime spectrum. Returns the panel's rect, so a capture can
 /// take it in along with the views above it.
 pub fn bottom_panel(app: &mut App, root: &mut egui::Ui) -> egui::Rect {
@@ -35,6 +43,11 @@ pub fn bottom_panel(app: &mut App, root: &mut egui::Ui) -> egui::Rect {
                 );
                 return;
             };
+            let [sr, sg, sb] = app.settings.spectrum_color;
+            let curve_c = Color32::from_rgb(sr, sg, sb);
+            let fill_c = curve_c.gamma_multiply(0.35);
+            let peak_c = peak_color(curve_c);
+
             let nyq = live.sample_rate() as f32 / 2.0;
             let lmin = MIN_HZ.ln();
             let lmax = nyq.ln();
@@ -107,17 +120,11 @@ pub fn bottom_panel(app: &mut App, root: &mut egui::Ui) -> egui::Rect {
                 p.vline(
                     pt.x,
                     Rangef::new(pt.y, rect.bottom()),
-                    Stroke::new(1.0, Color32::from_rgba_premultiplied(40, 80, 120, 90)),
+                    Stroke::new(1.0, fill_c),
                 );
             }
-            p.add(egui::Shape::line(
-                peaks,
-                Stroke::new(1.0, Color32::from_rgb(200, 120, 60)),
-            ));
-            p.add(egui::Shape::line(
-                curve,
-                Stroke::new(1.5, Color32::from_rgb(120, 200, 255)),
-            ));
+            p.add(egui::Shape::line(peaks, Stroke::new(1.0, peak_c)));
+            p.add(egui::Shape::line(curve, Stroke::new(1.5, curve_c)));
         })
         .response
         .rect

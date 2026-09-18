@@ -256,6 +256,7 @@ pub enum Topic {
     SpectrogramCard,
     WaveformCard,
     SpectrumCard,
+    PlaybackCard,
     FilesCard,
     KeysCard,
     AboutCard,
@@ -287,6 +288,15 @@ pub enum Topic {
     // ---- settings: spectrum --------------------------------------------
     SpectrumSize,
     SpectrumAveraging,
+    SpectrumColour,
+
+    // ---- settings: playback --------------------------------------------
+    Autoplay,
+    AutoplayStartup,
+    RewindAtEnd,
+    StopPosition,
+    ResetLevels,
+    FollowPlayhead,
 
     // ---- settings: files -----------------------------------------------
     RememberFiles,
@@ -689,6 +699,12 @@ impl Topic {
                 "The frequency content of whatever is playing right now, updated live. A slice \
                  through the spectrogram at the playhead, read as a graph.",
             ),
+            T::PlaybackCard => (
+                "Playback",
+                "What the transport does without being asked: whether a file starts playing by \
+                 itself, where the playhead goes when one ends, and what gain and pan a newly \
+                 opened file is heard at.",
+            ),
             T::FilesCard => (
                 "Files",
                 "What the app remembers about the files you open: the history behind the \
@@ -838,6 +854,58 @@ impl Topic {
                  display and makes steady tones easy to read; lower reacts instantly but \
                  flickers.",
             ),
+            T::SpectrumColour => (
+                "Colour",
+                "The live curve's colour. The fill beneath it and the peak-hold line above it \
+                 are drawn from the same hue, the fill translucent and the peak dimmed, so the \
+                 three read as one trace. Independent of the waveform's colour.",
+            ),
+
+            // ---- settings: playback ------------------------------------
+            T::Autoplay => (
+                "Autoplay",
+                "Starts playing the moment a file has finished loading, however it was opened: \
+                 from the launcher, by drag and drop, from the Open button or from the Recent \
+                 menu. Switch it off and a freshly opened file waits at the beginning for the \
+                 space bar. Playback begins as soon as the audio is decoded, which on a long \
+                 file is before the spectrogram has finished drawing.",
+            ),
+            T::AutoplayStartup => (
+                "Autoplay at startup",
+                "Whether autoplay also covers the file reopened from your last session. Switch \
+                 it off to have a launch come up quiet, while a file you actually opened still \
+                 plays by itself. A file named on the command line counts as opened, not \
+                 reopened, and plays either way.",
+            ),
+            T::RewindAtEnd => (
+                "At the end of a file",
+                "Sends the playhead back to the start once a file has played out, rather than \
+                 leaving it parked on the last frame. Either way the next Space plays from the \
+                 beginning; this only decides what you are looking at in between. A loop never \
+                 reaches the end, so it is unaffected.",
+            ),
+            T::StopPosition => (
+                "Stop position",
+                "Where stopping leaves the playhead: back at the frame this pass of playback \
+                 began from, so Space, Space plays the same spot twice — which is what \
+                 auditioning one moment over and over asks for. Clicking elsewhere while it \
+                 plays makes that the spot. Both Stop and Space do it. Switch it off and Space \
+                 pauses where it is, while Stop rewinds to the beginning of the file, or of \
+                 the loop when there is one.",
+            ),
+            T::ResetLevels => (
+                "Gain and pan",
+                "Gain and pan are remembered between runs, which means a cut left in from the \
+                 last file is applied to the next one. Switch this on and both go back to 0 dB \
+                 and centre whenever a file opens, so what you hear is the file.",
+            ),
+            T::FollowPlayhead => (
+                "Follow",
+                "Scrolls the view along with the playhead while it plays, keeping it in sight \
+                 at any zoom. The same setting as Follow in the transport bar — one box in two \
+                 places, either of which moves the other. Zooming to a selection switches it \
+                 off, on the grounds that you went there to look at something.",
+            ),
 
             // ---- settings: files ---------------------------------------
             T::RememberFiles => (
@@ -955,6 +1023,7 @@ mod tests {
         Topic::SpectrogramCard,
         Topic::WaveformCard,
         Topic::SpectrumCard,
+        Topic::PlaybackCard,
         Topic::FilesCard,
         Topic::KeysCard,
         Topic::AboutCard,
@@ -978,6 +1047,13 @@ mod tests {
         Topic::WaveHeight,
         Topic::SpectrumSize,
         Topic::SpectrumAveraging,
+        Topic::SpectrumColour,
+        Topic::Autoplay,
+        Topic::AutoplayStartup,
+        Topic::RewindAtEnd,
+        Topic::StopPosition,
+        Topic::ResetLevels,
+        Topic::FollowPlayhead,
         Topic::RememberFiles,
     ];
 }

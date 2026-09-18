@@ -46,12 +46,8 @@ pub fn top_bar(app: &mut App, root: &mut egui::Ui) {
             if transport_button(ui, has, icon, "Space").clicked() && has {
                 app.toggle_play();
             }
-            if transport_button(ui, has, Transport::Stop, "Stop").clicked()
-                && let Some(e) = &app.engine
-            {
-                e.pause();
-                let start = app.loop_region().map_or(0, |(a, _)| a);
-                e.seek(start);
+            if transport_button(ui, has, Transport::Stop, "Stop").clicked() && has {
+                app.stop();
             }
 
             let sr = app.sample_rate();
@@ -155,7 +151,10 @@ pub fn top_bar(app: &mut App, root: &mut egui::Ui) {
                     app.help_mode = !app.help_mode;
                 }
                 ui.separator();
-                ui.checkbox(&mut app.settings.follow_playhead, "Follow");
+                let follow = ui
+                    .checkbox(&mut app.settings.follow_playhead, "Follow")
+                    .on_hover_text("Keep the playhead in view while playing");
+                help::offer_response(ui, &follow, Topic::FollowPlayhead);
                 update_notice(app, ui);
             });
         });

@@ -29,6 +29,9 @@ use auriscope::audio::{DecodedAudio, Engine, decode_file};
 /// Default waveform colour: the blue the app has always drawn.
 pub const DEFAULT_WAVE_COLOR: [u8; 3] = [86, 156, 214];
 
+/// Default spectrum colour: the lighter blue the live curve has always been.
+pub const DEFAULT_SPECTRUM_COLOR: [u8; 3] = [120, 200, 255];
+
 /// How many files the history keeps. Long enough to cover a session's worth of
 /// takes, short enough that the menu stays a menu.
 pub const RECENT_MAX: usize = 12;
@@ -51,6 +54,9 @@ pub struct Settings {
     pub pan: f32,
     pub spectrum_size: usize,
     pub spectrum_averaging: f32,
+    /// Live spectrum curve colour; the fill under it and the peak-hold line
+    /// are drawn from the same hue.
+    pub spectrum_color: [u8; 3],
     pub waveform_fraction: f32,
     pub show_waveform: bool,
     pub show_spectrogram: bool,
@@ -69,6 +75,22 @@ pub struct Settings {
     pub wave_v_zoom: f32,
     pub follow_playhead: bool,
     pub show_rms: bool,
+    /// Start playing as soon as a file finishes loading, rather than waiting
+    /// for the space bar.
+    pub autoplay: bool,
+    /// Whether [`Settings::autoplay`] also covers the file reopened at
+    /// startup. Off means a launch is quiet and only a file you actually
+    /// opened plays by itself.
+    pub autoplay_startup: bool,
+    /// Send the playhead back to the start when a file plays out, instead of
+    /// leaving it parked at the end.
+    pub rewind_at_end: bool,
+    /// Stop returns the playhead to wherever playback last started from,
+    /// rather than to the beginning of the file or of the loop.
+    pub stop_to_play_start: bool,
+    /// Put gain back to 0 dB and pan back to centre whenever a file opens, so
+    /// a level left over from the last session cannot carry into the next one.
+    pub reset_levels_on_open: bool,
     pub last_file: Option<PathBuf>,
     /// Keep a history of the files opened, and reopen the newest of them at
     /// startup. Off means nothing about opened files is written to disk.
@@ -98,6 +120,7 @@ impl Default for Settings {
             pan: 0.0,
             spectrum_size: 4096,
             spectrum_averaging: 0.6,
+            spectrum_color: DEFAULT_SPECTRUM_COLOR,
             waveform_fraction: 0.3,
             show_waveform: true,
             show_spectrogram: true,
@@ -110,6 +133,11 @@ impl Default for Settings {
             wave_v_zoom: 1.0,
             follow_playhead: true,
             show_rms: true,
+            autoplay: true,
+            autoplay_startup: true,
+            rewind_at_end: false,
+            stop_to_play_start: true,
+            reset_levels_on_open: false,
             last_file: None,
             remember_recent: true,
             recent_files: Vec::new(),
@@ -121,6 +149,13 @@ impl Default for Settings {
 }
 
 impl Settings {
+    /// Whether a file opening now should start playing on its own.
+    /// `restored` marks the file reopened from the last session, which the
+    /// startup option can exempt.
+    fn plays_on_open(&self, restored: bool) -> bool {
+        self.autoplay && (!restored || self.autoplay_startup)
+    }
+
     /// Put `path` at the head of the history and make it the file to reopen
     /// next time. A no-op while the history is switched off, which is what
     /// keeps that setting a real one: nothing about the file is written.
@@ -290,7 +325,19 @@ pub struct App {
     icon: TextureHandle,
     pub updater: update::Updater,
     last_tick: Instant,
-    pending_open: Option<PathBuf>,
+    /// A file to open on the first frame, and whether it is the one restored
+    /// from the last session rather than one the user asked for.
+    pending_open: Option<(PathBuf, bool)>,
+    /// Whether the file now loading should play as soon as it is ready.
+    /// Decided when the open starts, since that is where the difference
+    /// between a restore and a real open is known.
+    play_when_ready: bool,
+    /// Whether the engine was playing last frame, so that a file *reaching*
+    /// its end can be told from a playhead already parked there.
+    was_playing: bool,
+    /// The frame playback last started from, which is where Stop comes back
+    /// to. `None` until a file has been played at all.
+    play_from: Option<u64>,
     /// A window capture on its way to disk, from the camera button in the
     /// transport bar. See [`capture`].
     capture: Option<capture::Capture>,
@@ -330,7 +377,10 @@ impl App {
         // label. A little more air reads better, everywhere at once.
         cc.egui_ctx
             .all_styles_mut(|s| s.spacing.icon_spacing = ICON_GAP);
-        let pending_open = initial.or_else(|| settings.last_file.clone());
+        let pending_open = match initial {
+            Some(p) => Some((p, false)),
+            None => settings.last_file.clone().map(|p| (p, true)),
+        };
         let mut updater = update::Updater::default();
         if update::ENABLED
             && settings.check_updates
@@ -384,6 +434,9 @@ impl App {
             updater,
             last_tick: Instant::now(),
             pending_open,
+            play_when_ready: false,
+            was_playing: false,
+            play_from: None,
             capture: None,
             views_rect: egui::Rect::NOTHING,
             notice: None,
@@ -407,7 +460,27 @@ impl App {
 
     // ---- loading -------------------------------------------------------
 
+    /// Open a file the user asked for: from the launcher, a command-line
+    /// argument, the Open button, the Recent menu or a drop.
     pub fn open(&mut self, path: &Path) {
+        self.open_inner(path, false);
+    }
+
+    /// Open the file left from the last session. Separate from [`App::open`]
+    /// only so that autoplay can leave a launch quiet if asked to.
+    fn open_restored(&mut self, path: &Path) {
+        self.open_inner(path, true);
+    }
+
+    fn open_inner(&mut self, path: &Path, restored: bool) {
+        self.play_when_ready = self.settings.plays_on_open(restored);
+        self.play_from = None;
+        // Before the load, so the transport's sliders read 0 and centre while
+        // the file is still opening rather than snapping back when it lands.
+        if self.settings.reset_levels_on_open {
+            self.settings.gain_db = 0.0;
+            self.settings.pan = 0.0;
+        }
         if let Some(job) = &self.job {
             job.cancel.store(true, Ordering::Relaxed);
         }
@@ -628,6 +701,10 @@ impl App {
                                 self.settings.spectrum_size,
                                 engine.device_rate,
                             ));
+                            if self.play_when_ready {
+                                self.play_from = Some(0);
+                                engine.play();
+                            }
                             self.engine = Some(engine);
                         }
                         Err(e) => self.error = Some(format!("audio output: {e:#}")),
@@ -660,23 +737,85 @@ impl App {
     // ---- transport -------------------------------------------------------
 
     fn toggle_play(&mut self) {
+        let Some(playing) = self.engine.as_ref().map(Engine::is_playing) else {
+            return;
+        };
+        if playing {
+            // Pausing is stopping, so it hands the cursor back the same way
+            // the Stop button does. Off, Space pauses where it is.
+            if self.settings.stop_to_play_start {
+                self.stop();
+            } else if let Some(engine) = &self.engine {
+                engine.pause();
+            }
+            return;
+        }
         let Some(engine) = &self.engine else {
             return;
         };
-        if engine.is_playing() {
+        if engine.playhead() >= self.total_frames() as u64 {
+            let start = self.loop_region().map_or(0, |(a, _)| a);
+            engine.seek(start);
+        }
+        // Noted before the stream moves, so Stop comes back to the frame play
+        // was pressed at rather than to one a buffer later.
+        self.play_from = Some(engine.playhead());
+        engine.play();
+    }
+
+    /// Where Stop leaves the playhead. `home` is where it went before the
+    /// setting existed: the start of the loop if there is one, otherwise the
+    /// start of the file.
+    fn stop_target(&self) -> u64 {
+        let home = self.loop_region().map_or(0, |(a, _)| a);
+        stop_frame(self.settings.stop_to_play_start, self.play_from, home)
+    }
+
+    /// Stop: pause, and put the playhead where [`App::stop_target`] says.
+    fn stop(&mut self) {
+        let target = self.stop_target();
+        if let Some(engine) = &self.engine {
             engine.pause();
-        } else {
-            if engine.playhead() >= self.total_frames() as u64 {
-                let start = self.loop_region().map_or(0, |(a, _)| a);
-                engine.seek(start);
-            }
-            engine.play();
+            engine.seek(target);
+        }
+    }
+
+    /// Rewind a file that has just played out, if that is what the setting
+    /// asks for.
+    ///
+    /// What matters is the transition out of playing: the engine parks the
+    /// playhead at the end and stays there, so a standing test would also
+    /// drag back a playhead the user deliberately seeked to the end. A loop
+    /// never reaches the end at all — the engine wraps inside it — so this
+    /// only ever fires on a straight play to the last frame.
+    fn poll_playback_end(&mut self) {
+        let Some((playing, head)) = self.engine.as_ref().map(|e| (e.is_playing(), e.playhead()))
+        else {
+            self.was_playing = false;
+            return;
+        };
+        let ended = self.was_playing && !playing && head >= self.total_frames() as u64;
+        self.was_playing = playing;
+        if ended && self.settings.rewind_at_end {
+            let start = self.loop_region().map_or(0.0, |(a, _)| a as f64);
+            self.seek_frames(start);
         }
     }
 
     fn seek_frames(&mut self, frame: f64) {
-        if let Some(engine) = &self.engine {
-            engine.seek(frame.clamp(0.0, self.total_frames()) as u64);
+        let frame = frame.clamp(0.0, self.total_frames()) as u64;
+        let Some(playing) = self.engine.as_ref().map(|e| {
+            e.seek(frame);
+            e.is_playing()
+        }) else {
+            return;
+        };
+        // A seek mid-playback is playback starting again somewhere else — a
+        // click on the waveform is how you audition a spot — so that spot,
+        // not the last press of play, is what Stop comes back to. Seeking
+        // while stopped is just positioning the cursor and leaves it alone.
+        if playing {
+            self.play_from = Some(frame);
         }
     }
 
@@ -1162,13 +1301,18 @@ impl eframe::App for App {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
         let ctx = &ctx;
-        if let Some(p) = self.pending_open.take()
+        if let Some((p, restored)) = self.pending_open.take()
             && p.exists()
         {
-            self.open(&p);
+            if restored {
+                self.open_restored(&p);
+            } else {
+                self.open(&p);
+            }
         }
         self.poll_job(ctx);
         self.poll_detail();
+        self.poll_playback_end();
         if self.updater.poll() {
             self.settings.update_last_check = update::unix_now();
         }
@@ -1218,6 +1362,17 @@ impl eframe::App for App {
         } else {
             ctx.request_repaint_after(std::time::Duration::from_millis(100));
         }
+    }
+}
+
+/// Where Stop puts the playhead: the frame playback last started from when
+/// that is what the setting asks and a file has actually been played, and
+/// `home` — the loop's start, or the file's — otherwise.
+fn stop_frame(to_play_start: bool, play_from: Option<u64>, home: u64) -> u64 {
+    if to_play_start {
+        play_from.unwrap_or(home)
+    } else {
+        home
     }
 }
 
@@ -1344,6 +1499,37 @@ mod tests {
             s.remember_file(Path::new(p));
         }
         s
+    }
+
+    #[test]
+    fn autoplay_can_be_told_to_leave_a_launch_quiet() {
+        let mut s = Settings::default();
+        // The default plays everything, restored file included.
+        assert!(s.plays_on_open(false));
+        assert!(s.plays_on_open(true));
+        // The exemption is for the restored file alone: a file opened by hand
+        // still plays.
+        s.autoplay_startup = false;
+        assert!(s.plays_on_open(false));
+        assert!(!s.plays_on_open(true));
+        // Autoplay off wins over it either way.
+        s.autoplay = false;
+        s.autoplay_startup = true;
+        assert!(!s.plays_on_open(false));
+        assert!(!s.plays_on_open(true));
+    }
+
+    #[test]
+    fn stop_comes_back_to_where_play_was_pressed() {
+        // Started 90_000 frames in, with no loop: Stop returns there.
+        assert_eq!(stop_frame(true, Some(90_000), 0), 90_000);
+        // Nothing played yet, so there is no such frame and Stop rewinds.
+        assert_eq!(stop_frame(true, None, 0), 0);
+        // Switched off, Stop rewinds however far in playback began.
+        assert_eq!(stop_frame(false, Some(90_000), 0), 0);
+        // A loop's start is what rewinding means while one is set.
+        assert_eq!(stop_frame(false, Some(90_000), 48_000), 48_000);
+        assert_eq!(stop_frame(true, None, 48_000), 48_000);
     }
 
     #[test]
