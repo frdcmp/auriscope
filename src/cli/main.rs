@@ -8,6 +8,7 @@
 //! saying when or at what frequency.
 
 mod args;
+mod spec;
 
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -18,8 +19,9 @@ use serde_json::{Value, json};
 
 use args::Args;
 use auriscope::analysis::{
-    ColorMap, DEFAULT_CUSTOM, DetailTile, Spectrogram, StftParams, ViewParams, WaveformPyramid,
-    WindowKind, compute_stats, render_view,
+    ColorMap, DEFAULT_CUSTOM, DetailTile, Envelope, SPEECH_BAND, Spectrogram, StftParams,
+    ViewParams, WaveformPyramid, WindowKind, band_limit, clicks, compute_stats, floor_steps,
+    high_pass, render_view, truncation, zero_runs,
 };
 use auriscope::audio::{DecodedAudio, decode_file};
 use auriscope::plot::figure::{ColorBar, Overlay, WaveScale};
@@ -30,21 +32,50 @@ const HELP: &str = "\
 Auriscope CLI — audio analysis without a window
 
 Usage:
-  auriscope-cli analyze FILE [options]
+  auriscope-cli analyze PATH [options]
+  auriscope-cli qc      PATH --spec SPEC.toml [options]
   auriscope-cli render  FILE [options]
+
+PATH is a file, or a folder: a folder is walked to any depth and every audio
+file under it is measured, one JSON object per line.
 
 Commands:
   analyze   write what the sidebar knows about the file, as JSON
+  qc        check files against a delivery spec; exit 1 if any fail
   render    write the waveform and spectrogram as an annotated PNG
 
 Common options:
-  -o, --output PATH    where to write (analyze defaults to stdout)
+  -o, --output PATH    where to write (defaults to stdout)
       --quiet          no progress on stderr
   -h, --help           this text
   -V, --version        print the version and exit
 
 analyze options:
+      --start SECS     measure only from here (default the start of the file)
+      --end SECS       measure only up to here (default the end)
+      --structure      where the speech is: lead, tail, pauses, breaths
+      --segments       every stretch of the file, with its level
+      --defects        digital silence, clicks, seams, truncation
+      --spectral       centroid, rolloff, flatness, ceiling, hum, bands
+      --all            all of the above
+      --timeline       loudness and level against time, one entry per 100 ms
       --compact        one line of JSON instead of indented
+
+      --speech-db DB   how far over the floor is speech (default 10)
+      --min-speech-ms  shorter runs are not speech (default 100)
+      --min-gap-ms     shorter dips are not pauses (default 80)
+      --zero-run-ms MS shortest run of zeros worth reporting (default 1)
+      --click-db DB    step over the local RMS that counts (default 32)
+      --spectral-window N  FFT size for --spectral (default 8192)
+
+qc options:
+      --spec PATH      the delivery spec, as TOML. Required
+      --render-failures DIR   a picture of each failure, zoomed on the finding
+      --fail-only      leave passing files out of the output
+
+folder options:
+      --csv            a flat table instead of one JSON object per line
+      --jobs N         files at once (default: as many as there are cores)
 
 render options:
       --start SECS     where the picture begins (default 0)
@@ -79,6 +110,9 @@ render options:
 
 Examples:
   auriscope-cli analyze take.wav | jq .loudness
+  auriscope-cli analyze take.wav --start 0 --end 0.2 | jq .channels[0]
+  auriscope-cli analyze takes/ --all --csv -o takes.csv
+  auriscope-cli qc takes/ --spec spec.toml --csv -o qc.csv --render-failures bad/
   auriscope-cli render take.wav -o take.png
   auriscope-cli render take.wav --start 3.1 --end 3.7 --window 1024 -o click.png
   auriscope-cli render take.wav --wave-zoom 512 -o floor.png
@@ -134,30 +168,146 @@ fn run() -> Result<()> {
     }
     match args.positional[0].as_str() {
         "analyze" | "analyse" => analyze(&args),
+        "qc" => qc(&args),
         "render" => render(&args),
         other => bail!("unknown command {other:?}; try --help"),
     }
 }
 
+/// Extensions worth opening. Anything else in a folder — a sidecar, a
+/// spreadsheet, a stray PDF — is passed over in silence rather than reported as
+/// a file that would not decode.
+const AUDIO_EXTENSIONS: &[&str] = &[
+    "wav", "wave", "bwf", "rf64", "aif", "aiff", "aifc", "caf", "flac", "alac", "ape", "mp3",
+    "m4a", "mp4", "aac", "ogg", "oga", "opus", "mka", "mkv", "w64",
+];
+
+fn is_audio(path: &Path) -> bool {
+    path.extension()
+        .and_then(|e| e.to_str())
+        .map(|e| AUDIO_EXTENSIONS.contains(&e.to_ascii_lowercase().as_str()))
+        .unwrap_or(false)
+}
+
+/// Every audio file under `root`, however deep, in a stable order.
+///
+/// Sorted rather than left in whatever order the filesystem hands them back:
+/// two runs over the same tree should produce the same rows in the same
+/// places, or comparing one run to the next is needless work.
+fn walk(root: &Path) -> Result<Vec<PathBuf>> {
+    let mut out = Vec::new();
+    let mut stack = vec![root.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        let entries =
+            std::fs::read_dir(&dir).with_context(|| format!("reading {}", dir.display()))?;
+        for entry in entries {
+            let entry = entry.with_context(|| format!("reading {}", dir.display()))?;
+            let path = entry.path();
+            // Hidden directories are skipped: a tree of takes is not improved
+            // by the contents of its .git or .venv.
+            let hidden = path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .is_some_and(|n| n.starts_with('.'));
+            match entry.file_type() {
+                Ok(t) if t.is_dir() && !hidden => stack.push(path),
+                Ok(t) if t.is_file() && is_audio(&path) => out.push(path),
+                _ => {}
+            }
+        }
+    }
+    out.sort();
+    Ok(out)
+}
+
+/// What one file produced, or why it could not be read.
+struct Row {
+    path: PathBuf,
+    result: Result<Value>,
+}
+
+/// Run `each` over every file, on `jobs` threads, keeping the input order.
+///
+/// A file that fails to decode does not stop the run: in a folder of seven
+/// thousand takes, one that is truncated or is not really audio is a row that
+/// says so, not the end of the job.
+fn each_file(
+    files: &[PathBuf],
+    jobs: usize,
+    note: &(dyn Fn(&str) + Sync),
+    each: &(dyn Fn(&Path) -> Result<Value> + Sync),
+) -> Vec<Row> {
+    let done = std::sync::atomic::AtomicUsize::new(0);
+    let total = files.len();
+    let next = std::sync::atomic::AtomicUsize::new(0);
+    let rows: Vec<std::sync::Mutex<Option<Row>>> =
+        files.iter().map(|_| std::sync::Mutex::new(None)).collect();
+
+    std::thread::scope(|scope| {
+        for _ in 0..jobs.max(1) {
+            scope.spawn(|| {
+                loop {
+                    let i = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    let Some(path) = files.get(i) else { break };
+                    let result = each(path);
+                    *rows[i].lock().unwrap() = Some(Row {
+                        path: path.clone(),
+                        result,
+                    });
+                    let n = done.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+                    // About twenty updates over the whole run, whatever its
+                    // size: a line every twenty-five files is two hundred
+                    // lines of scrollback for a folder of five thousand.
+                    let every = (total / 20).max(1);
+                    if n.is_multiple_of(every) || n == total {
+                        note(&format!("{n}/{total}"));
+                    }
+                }
+            });
+        }
+    });
+    rows.into_iter()
+        .filter_map(|r| r.into_inner().unwrap())
+        .collect()
+}
+
+/// How many files to work on at once.
+fn jobs(args: &Args) -> Result<usize> {
+    Ok(args
+        .get::<usize>("jobs")?
+        .unwrap_or_else(|| std::thread::available_parallelism().map_or(1, |n| n.get()))
+        .max(1))
+}
+
 /// The file to work on: the one positional argument that is not the command.
 fn source(args: &Args) -> Result<PathBuf> {
     match args.positional.len() {
-        0 | 1 => bail!("no file given"),
+        0 | 1 => bail!("no file or folder given"),
         2 => Ok(PathBuf::from(&args.positional[1])),
         _ => bail!(
-            "one file at a time, got {}",
+            "one path at a time, got {}",
             args.positional[1..].join(", ")
         ),
+    }
+}
+
+/// The files a command was pointed at: one, or every audio file under a folder.
+fn targets(path: &Path) -> Result<(Vec<PathBuf>, bool)> {
+    if path.is_dir() {
+        let files = walk(path)?;
+        if files.is_empty() {
+            bail!("no audio files under {}", path.display());
+        }
+        Ok((files, true))
+    } else {
+        Ok((vec![path.to_path_buf()], false))
     }
 }
 
 /// Decode, and measure while everything is in memory. Loudness that will not
 /// compute is a warning and a null block, not a failure: the rest of the
 /// report is still worth having.
-fn open(
-    path: &Path,
-    note: &dyn Fn(&str),
-) -> Result<(DecodedAudio, Option<auriscope::analysis::FileStats>)> {
+fn open(path: &Path, note: &dyn Fn(&str)) -> Result<DecodedAudio> {
     note("decoding");
     let audio = decode_file(path, &|_| {})?;
     let audio =
@@ -165,23 +315,445 @@ fn open(
     if audio.sample_rate() == 0 || audio.channels.is_empty() {
         bail!("{} has no audio in it", path.display());
     }
+    Ok(audio)
+}
+
+/// Measure `audio` over `region`, or over all of it when there is none.
+fn measure(
+    audio: &DecodedAudio,
+    region: Option<&Region>,
+    note: &dyn Fn(&str),
+) -> Option<auriscope::analysis::FileStats> {
     note("measuring");
-    let stats = match compute_stats(&audio.channels, audio.sample_rate()) {
+    let planes: Vec<&[f32]> = match region {
+        Some(r) => audio
+            .channels
+            .iter()
+            .map(|c| &c[r.start_frame.min(c.len())..r.end_frame.min(c.len())])
+            .collect(),
+        None => audio.channels.iter().map(Vec::as_slice).collect(),
+    };
+    match compute_stats(&planes, audio.sample_rate()) {
         Ok(s) => Some(s),
         Err(e) => {
             log::warn!("loudness: {e}");
             None
         }
-    };
-    Ok((audio, stats))
+    }
+}
+
+/// A span of a file to measure or to draw, resolved against its length.
+#[derive(Debug, Clone, Copy)]
+struct Region {
+    start_secs: f64,
+    end_secs: f64,
+    start_frame: usize,
+    end_frame: usize,
+}
+
+impl Region {
+    /// `--start`/`--end` against a file of `duration` seconds, or `None` when
+    /// neither was given and the whole file is meant.
+    fn resolve(args: &Args, duration: f64, sample_rate: u32) -> Result<Option<Self>> {
+        let start = args.get::<f64>("start")?;
+        let end = args.get::<f64>("end")?;
+        if start.is_none() && end.is_none() {
+            return Ok(None);
+        }
+        let start_secs = start.unwrap_or(0.0).max(0.0);
+        let end_secs = end.unwrap_or(duration).min(duration);
+        if end_secs <= start_secs {
+            bail!(
+                "--end ({end_secs}) must be after --start ({start_secs}); \
+                 the file is {duration:.3} s long"
+            );
+        }
+        let frame = |t: f64| (t * sample_rate as f64).round().max(0.0) as usize;
+        Ok(Some(Self {
+            start_secs,
+            end_secs,
+            start_frame: frame(start_secs),
+            end_frame: frame(end_secs),
+        }))
+    }
+
+    fn json(&self) -> Value {
+        json!({
+            "start_secs": self.start_secs,
+            "end_secs": self.end_secs,
+            "duration_secs": self.end_secs - self.start_secs,
+            "start_frames": self.start_frame,
+            "end_frames": self.end_frame,
+        })
+    }
 }
 
 fn analyze(args: &Args) -> Result<()> {
     let path = source(args)?;
     let note = notifier(args);
-    let (audio, stats) = open(&path, &note)?;
-    let report = report::file_report(&audio.info, stats.as_ref());
+    let (files, folder) = targets(&path)?;
+    if folder {
+        note(&format!("{} files under {}", files.len(), path.display()));
+        let quiet = |_: &str| {};
+        let rows = each_file(&files, jobs(args)?, &note, &|p| {
+            analyze_one(args, p, &quiet)
+        });
+        return emit_rows(args, rows, None);
+    }
+    let report = analyze_one(args, &path, &note)?;
     emit(args, &report)
+}
+
+/// One file's report, which is the same whether it was asked for on its own or
+/// as one of several thousand.
+fn analyze_one(args: &Args, path: &Path, note: &dyn Fn(&str)) -> Result<Value> {
+    analyze_with(args, path, note, None)
+}
+
+/// As [`analyze_one`], with thresholds a spec has an opinion about. A spec is
+/// meant to be the whole agreement, so when it names a threshold that is the
+/// one used, whatever the command line says.
+fn analyze_with(
+    args: &Args,
+    path: &Path,
+    note: &dyn Fn(&str),
+    click_db: Option<f32>,
+) -> Result<Value> {
+    let audio = open(path, note)?;
+    let region = Region::resolve(args, audio.info.duration_secs(), audio.sample_rate())?;
+    let stats = measure(&audio, region.as_ref(), note);
+    let mut report = report::file_report(&audio.info, stats.as_ref());
+    if let (Some(obj), Some(region)) = (report.as_object_mut(), region) {
+        // Only when one was asked for: its absence is what says the numbers
+        // are the whole file's.
+        obj.insert("region".into(), region.json());
+    }
+    if args.has("timeline")
+        && let (Some(obj), Some(stats)) = (report.as_object_mut(), stats.as_ref())
+    {
+        obj.insert("timeline".into(), report::timeline_json(stats));
+    }
+    let deep = Deep::run(args, &audio, region.as_ref(), note, click_db)?;
+    if let Some(obj) = report.as_object_mut() {
+        deep.insert_into(obj, args);
+    }
+    Ok(report)
+}
+
+/// The passes beyond the one-walk statistics: structure, defects and spectrum.
+///
+/// They share their working — the envelopes, and the segmentation that tells
+/// the other two where the words are — so they are computed together and
+/// emitted separately. Asking for any of them costs the envelope pass once.
+#[derive(Default)]
+struct Deep {
+    segmentation: Option<auriscope::analysis::Segmentation>,
+    defects: Option<Value>,
+    spectral: Option<Value>,
+    sample_rate: u32,
+}
+
+impl Deep {
+    fn wanted(args: &Args) -> (bool, bool, bool) {
+        // A spec asks about structure and defects, so `qc` needs both whether
+        // or not they were asked for by name: a rule checked against a
+        // measurement nobody took reports nothing and reads as a pass.
+        let all = args.has("all") || args.positional.first().is_some_and(|c| c == "qc");
+        (
+            all || args.has("segments") || args.has("structure"),
+            all || args.has("defects"),
+            args.has("all") || args.has("spectral"),
+        )
+    }
+
+    fn run(
+        args: &Args,
+        audio: &DecodedAudio,
+        region: Option<&Region>,
+        note: &dyn Fn(&str),
+        click_db: Option<f32>,
+    ) -> Result<Self> {
+        let (want_structure, want_defects, want_spectral) = Self::wanted(args);
+        if !(want_structure || want_defects || want_spectral) {
+            return Ok(Self::default());
+        }
+        let sr = audio.sample_rate();
+        // One channel decides the structure of a file: a mono mix, or the
+        // chosen channel. Speech starts and stops at the same moment in every
+        // channel of a take, and two answers would only have to be reconciled.
+        let channel = args.get::<usize>("channel")?.unwrap_or(0);
+        if channel >= audio.channels.len() {
+            bail!(
+                "--channel {channel}: the file has {} (0 to {})",
+                audio.channels.len(),
+                audio.channels.len() - 1
+            );
+        }
+        let whole = &audio.channels[channel];
+        let samples: &[f32] = match region {
+            Some(r) => &whole[r.start_frame.min(whole.len())..r.end_frame.min(whole.len())],
+            None => whole,
+        };
+
+        note("envelopes");
+        let decision = Envelope::compute(
+            &band_limit(samples, sr, SPEECH_BAND.0, SPEECH_BAND.1),
+            sr,
+            FRAME_MS,
+            HOP_MS,
+        );
+        let full = Envelope::compute(samples, sr, FRAME_MS, HOP_MS);
+        let above_80 = Envelope::compute(&high_pass(samples, sr, 80.0), sr, FRAME_MS, HOP_MS);
+
+        let params = segment_params(args)?;
+        let seg = auriscope::analysis::segment(&decision, &full, &above_80, samples, params);
+
+        let mut out = Self {
+            sample_rate: sr,
+            ..Default::default()
+        };
+        if want_defects {
+            note("defects");
+            let min_zero = (sr as f64 * args.get::<f64>("zero-run-ms")?.unwrap_or(1.0) / 1000.0)
+                .round()
+                .max(1.0) as usize;
+            let click_db = match click_db {
+                Some(v) => v,
+                None => args.get::<f32>("click-db")?.unwrap_or(32.0),
+            };
+            let zero = zero_runs(samples, min_zero);
+            let hits = clicks(samples, sr, click_db);
+            let seams = floor_steps(&full, &seg.speech_frames, 50, 6.0);
+            let trunc = truncation(samples, sr, seg.floor_db, 5, 20.0);
+            let hop = decision.hop_len;
+            let speech = seg.speech_frames.clone();
+            let speech_at = move |secs: f64| -> bool {
+                let i = (secs * sr as f64) as usize / hop.max(1);
+                speech.get(i).copied().unwrap_or(false)
+            };
+            out.defects = Some(report::defects_json(
+                &zero, &hits, &seams, trunc, &speech_at, sr,
+            ));
+        }
+        if want_spectral {
+            note("spectrum");
+            let window = args.get::<usize>("spectral-window")?.unwrap_or(8192);
+            if !StftParams::SIZES.contains(&window) {
+                bail!(
+                    "--spectral-window {window}: one of {}",
+                    StftParams::SIZES
+                        .iter()
+                        .map(|s| s.to_string())
+                        .collect::<Vec<_>>()
+                        .join(" ")
+                );
+            }
+            let params = StftParams {
+                window_size: window,
+                ..Default::default()
+            };
+            let spec = Spectrogram::compute(samples, sr, params, &|_| {}, &|| false)
+                .context("computing the spectrum")?;
+            // The hum search prefers the quiet, so hand it the silence: a
+            // 50 Hz line is easiest to see when nothing is talking over it.
+            let hop = params.hop();
+            let quiet: Vec<bool> = (0..spec.columns())
+                .map(|c| {
+                    let secs = (c * hop) as f64 / sr as f64;
+                    let i = (secs * sr as f64) as usize / decision.hop_len.max(1);
+                    !seg.speech_frames.get(i).copied().unwrap_or(false)
+                })
+                .collect();
+            out.spectral = Some(report::spectral_json(
+                &auriscope::analysis::spectral::analyse(&spec, &quiet),
+            ));
+        }
+        if want_structure {
+            out.segmentation = Some(seg);
+        }
+        Ok(out)
+    }
+
+    fn insert_into(self, obj: &mut serde_json::Map<String, Value>, args: &Args) {
+        let (want_structure, ..) = Self::wanted(args);
+        if let Some(seg) = &self.segmentation {
+            if want_structure {
+                obj.insert(
+                    "structure".into(),
+                    report::structure_json(seg, self.sample_rate),
+                );
+            }
+            // The full list is long on a file with many words, so it waits to
+            // be asked for by name even when --all is on.
+            if args.has("segments") || args.has("all") {
+                obj.insert("segments".into(), report::segments_json(seg));
+            }
+        }
+        if let Some(v) = self.defects {
+            obj.insert("defects".into(), v);
+        }
+        if let Some(v) = self.spectral {
+            obj.insert("spectral".into(), v);
+        }
+    }
+}
+
+/// Frame and hop for every structural measurement. Twenty milliseconds holds a
+/// couple of cycles of a low voice; a five millisecond hop puts an onset within
+/// five milliseconds of where it really is.
+const FRAME_MS: usize = 20;
+const HOP_MS: usize = 5;
+
+fn segment_params(args: &Args) -> Result<auriscope::analysis::SegmentParams> {
+    let mut p = auriscope::analysis::SegmentParams::default();
+    if let Some(v) = args.get::<f32>("speech-db")? {
+        p.speech_db = v;
+    }
+    if let Some(v) = args.get::<usize>("min-speech-ms")? {
+        p.min_speech_ms = v;
+    }
+    if let Some(v) = args.get::<usize>("min-gap-ms")? {
+        p.min_gap_ms = v;
+    }
+    Ok(p)
+}
+
+/// Check files against a delivery spec.
+///
+/// Exit 1 when something failed, 2 when the tool could not do its job. A
+/// script can then tell "the audio is wrong" from "the run is broken", which
+/// one exit code cannot.
+fn qc(args: &Args) -> Result<()> {
+    let path = source(args)?;
+    let note = notifier(args);
+    let spec_path = args
+        .str("spec")
+        .ok_or_else(|| anyhow!("qc needs a spec: --spec path/to/spec.toml"))?;
+    let spec = spec::Spec::load(Path::new(spec_path))?;
+    let (files, folder) = targets(&path)?;
+    note(&format!(
+        "{} file{} against {}",
+        files.len(),
+        if files.len() == 1 { "" } else { "s" },
+        if spec.name.is_empty() {
+            spec_path.to_owned()
+        } else {
+            spec.name.clone()
+        }
+    ));
+
+    // A spec asks about structure and defects, so the passes that measure them
+    // are on whether or not the flags said so. Checking a rule against a
+    // measurement that was never taken would report nothing and look like a
+    // pass.
+    let quiet = |_: &str| {};
+    let click_db = spec.defects.click_db;
+    let rows = each_file(&files, jobs(args)?, &note, &|p| {
+        let mut report = analyze_with(args, p, &quiet, click_db)?;
+        let findings = spec.check(&report);
+        if let Some(obj) = report.as_object_mut() {
+            obj.insert(
+                "qc".into(),
+                json!({
+                    "spec": spec.name,
+                    "pass": !findings.iter().any(|f| f.severity == spec::Severity::Fail),
+                    "counts": spec::tally(&findings),
+                    "findings": findings.iter().map(|f| f.json()).collect::<Vec<_>>(),
+                }),
+            );
+        }
+        Ok(report)
+    });
+
+    let failed = rows
+        .iter()
+        .filter(|r| {
+            r.result
+                .as_ref()
+                .map(|v| v["qc"]["pass"] == json!(false))
+                .unwrap_or(true)
+        })
+        .count();
+
+    if let Some(dir) = args.str("render-failures") {
+        render_failures(&rows, Path::new(dir), &note)?;
+    }
+    let rows = match args.has("fail-only") {
+        true => rows
+            .into_iter()
+            .filter(|r| {
+                r.result
+                    .as_ref()
+                    .map(|v| v["qc"]["pass"] == json!(false))
+                    .unwrap_or(true)
+            })
+            .collect(),
+        false => rows,
+    };
+    let single = (!folder).then_some(());
+    emit_rows(args, rows, single.map(|_| "qc"))?;
+    note(&format!("{failed} of {} failed", files.len()));
+    if failed > 0 {
+        std::process::exit(1);
+    }
+    Ok(())
+}
+
+/// A picture of each failing file, zoomed on the first thing wrong with it.
+///
+/// A picture is often what a client asks for as evidence that something was
+/// found and fixed; this produces it in the same run that found the problem,
+/// framed on the finding rather than on the whole file.
+fn render_failures(rows: &[Row], dir: &Path, note: &dyn Fn(&str)) -> Result<()> {
+    std::fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
+    let mut made = 0usize;
+    for row in rows {
+        let Ok(report) = &row.result else { continue };
+        if report["qc"]["pass"] != json!(false) {
+            continue;
+        }
+        let stem = row
+            .path
+            .file_stem()
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "file".into());
+        let out = dir.join(format!("{stem}.png"));
+        // Around the first place something went wrong, with a second either
+        // side; failing that, the whole file.
+        let at = report["qc"]["findings"]
+            .as_array()
+            .and_then(|f| f.first())
+            .and_then(|f| f["at_secs"].as_array())
+            .and_then(|a| a.first())
+            .and_then(Value::as_f64);
+        let mut argv = vec![
+            "render".to_owned(),
+            row.path.display().to_string(),
+            "-o".into(),
+            out.display().to_string(),
+            "--quiet".into(),
+        ];
+        if let Some(at) = at {
+            argv.push("--start".into());
+            argv.push(format!("{:.3}", (at - 1.0).max(0.0)));
+            argv.push("--end".into());
+            argv.push(format!("{:.3}", at + 1.0));
+        }
+        // Through the same option parser the command line uses, so a render
+        // made here is one the reader could have made themselves.
+        let sub = Args::parse(argv)?;
+        if let Err(e) = render(&sub) {
+            log::warn!("rendering {}: {e:#}", row.path.display());
+            continue;
+        }
+        made += 1;
+    }
+    note(&format!(
+        "wrote {made} picture{} to {}",
+        if made == 1 { "" } else { "s" },
+        dir.display()
+    ));
+    Ok(())
 }
 
 fn render(args: &Args) -> Result<()> {
@@ -250,7 +822,11 @@ fn render(args: &Args) -> Result<()> {
     let want_end = args.get::<f64>("end")?;
     let want_channel = args.get::<usize>("channel")?;
 
-    let (audio, stats) = open(&path, &note)?;
+    let audio = open(&path, &note)?;
+    // The picture is of a span; the report beside it still describes the file,
+    // the way the window's capture does. `analyze --start --end` is the way to
+    // measure a span.
+    let stats = measure(&audio, None, &note);
     let sr = audio.sample_rate();
     let nyquist = sr as f32 / 2.0;
     let duration = audio.info.duration_secs();
@@ -858,6 +1434,125 @@ fn notifier(args: &Args) -> impl Fn(&str) + use<> {
     }
 }
 
+/// Write one row per file: JSON Lines by default, a flat table with `--csv`.
+///
+/// JSON Lines rather than one big array, because a run over seven thousand
+/// takes should be readable as it goes and greppable afterwards, and because a
+/// reader does not have to hold the whole thing to process one row.
+fn emit_rows(args: &Args, rows: Vec<Row>, single: Option<&str>) -> Result<()> {
+    // A lone file asked for by name still gets the readable form.
+    if let Some(_key) = single
+        && rows.len() == 1
+    {
+        let row = rows.into_iter().next().expect("one row");
+        return match row.result {
+            Ok(v) => emit(args, &v),
+            Err(e) => Err(e),
+        };
+    }
+
+    let mut text = String::new();
+    if args.has("csv") {
+        let headers: Vec<&str> = spec::COLUMNS.iter().map(|(h, _)| *h).collect();
+        let qc = rows.iter().any(|r| {
+            r.result
+                .as_ref()
+                .map(|v| !v["qc"].is_null())
+                .unwrap_or(false)
+        });
+        text.push_str(&headers.join(","));
+        if qc {
+            text.push_str(",qc_pass,qc_fails,qc_rules");
+        }
+        text.push_str(
+            ",error
+",
+        );
+        for row in &rows {
+            match &row.result {
+                Ok(v) => {
+                    let cells: Vec<String> = spec::COLUMNS
+                        .iter()
+                        .map(|(_, path)| spec::cell(spec::dig(v, path)))
+                        .collect();
+                    text.push_str(&cells.join(","));
+                    if qc {
+                        let rules: Vec<String> = v["qc"]["findings"]
+                            .as_array()
+                            .map(|f| {
+                                f.iter()
+                                    .filter(|f| f["severity"] == "fail")
+                                    .filter_map(|f| f["rule"].as_str().map(str::to_owned))
+                                    .collect()
+                            })
+                            .unwrap_or_default();
+                        text.push_str(&format!(
+                            ",{},{},{}",
+                            spec::cell(v["qc"]["pass"].as_bool().map(Value::from).as_ref()),
+                            rules.len(),
+                            spec::cell(Some(&Value::from(rules.join(" "))))
+                        ));
+                    }
+                    text.push_str(",\n");
+                }
+                Err(e) => {
+                    // A file that would not open still gets a row, with its
+                    // name and the reason. A silently shorter table is worse
+                    // than a table with a hole in it.
+                    let mut cells = vec![String::new(); spec::COLUMNS.len()];
+                    cells[0] = spec::cell(Some(&Value::from(
+                        row.path
+                            .file_name()
+                            .map(|n| n.to_string_lossy().into_owned())
+                            .unwrap_or_default(),
+                    )));
+                    cells[1] = spec::cell(Some(&Value::from(row.path.display().to_string())));
+                    text.push_str(&cells.join(","));
+                    if qc {
+                        text.push_str(",,,");
+                    }
+                    text.push(',');
+                    text.push_str(&spec::cell(Some(&Value::from(format!("{e:#}")))));
+                    text.push('\n');
+                }
+            }
+        }
+    } else {
+        for row in &rows {
+            let line = match &row.result {
+                Ok(v) => serde_json::to_string(v)?,
+                Err(e) => serde_json::to_string(&json!({
+                    "file": { "name": row.path.file_name().map(|n| n.to_string_lossy()),
+                              "path": row.path.display().to_string() },
+                    "error": format!("{e:#}"),
+                }))?,
+            };
+            text.push_str(&line);
+            text.push('\n');
+        }
+    }
+
+    match args.str("output") {
+        Some(path) => std::fs::write(path, text).with_context(|| format!("writing {path}")),
+        None => to_stdout(&text),
+    }
+}
+
+/// Write to stdout, and treat a closed pipe as the end of the job rather than
+/// as a failure.
+///
+/// `… | head -3` closes the pipe after three lines, and the default behaviour
+/// then is a panic about a broken pipe — which is no way to answer someone who
+/// only wanted to see the first few rows of a long run.
+fn to_stdout(text: &str) -> Result<()> {
+    use std::io::Write;
+    let mut out = std::io::stdout().lock();
+    match out.write_all(text.as_bytes()).and_then(|()| out.flush()) {
+        Err(e) if e.kind() == std::io::ErrorKind::BrokenPipe => Ok(()),
+        other => other.context("writing to stdout"),
+    }
+}
+
 fn emit(args: &Args, value: &Value) -> Result<()> {
     match args.str("output") {
         Some(path) => write_json(Path::new(path), value, args.has("compact")),
@@ -866,8 +1561,7 @@ fn emit(args: &Args, value: &Value) -> Result<()> {
                 true => serde_json::to_string(value)?,
                 false => serde_json::to_string_pretty(value)?,
             };
-            println!("{text}");
-            Ok(())
+            to_stdout(&format!("{text}\n"))
         }
     }
 }

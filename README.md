@@ -92,7 +92,7 @@ WAV resolves to more than one MIME type. If a file still opens elsewhere, run `g
 | 📊 | **Delivery checks** | Integrated, short-term and momentary LUFS, loudness range and true peak (EBU R128). Clipped sample counts and run counts. Per channel: sample peak, true peak, RMS, DC offset. Stereo phase correlation. |
 | 🎛️ | **A real player** | Sample-accurate click-to-seek, drag-to-select with loop regions, gain and pan, per-channel mute and solo, keyboard navigation. Clicking a channel's name in **Levels** picks it out: drawn full height and played out of both speakers, the way that channel would look and sound imported as a mono file. Whatever you are not hearing is dimmed wherever it appears — waveform, spectrogram and its own strip of meters. Opens by double-click, drag-and-drop, `Ctrl+O` or a command-line argument, and a **Recent** menu beside the Open button reopens the last dozen files. |
 | 📸 | **Capture what you see** | The camera beside the settings button saves the waveform, spectrogram and spectrum as a PNG — just the views, without the bars and the sidebar around them — and writes a `.json` of the same name beside it holding everything the side panel says: the file, the WAVE header, Broadcast Wave, tags, markers, loudness, per-channel levels, and the analysis and time range the picture was taken through. `Ctrl+Shift+S`. |
-| 🤖 | **A command line** | `auriscope-cli` is the same analysis with no window: `analyze` writes that JSON for any file on stdout, and `render` writes an annotated PNG of the waveform and spectrogram over any time range, with time, frequency and decibel axes drawn around it. For scripts, for a box with no display, and for handing a picture of a file to something that reads pictures. [More below](#-command-line). |
+| 🤖 | **A command line** | `auriscope-cli` is the same analysis with no window: `analyze` writes that JSON for any file — or any folder, walked to any depth and measured in parallel — `qc` checks a delivery against a spec you can read and edit, and `render` writes an annotated PNG of the waveform and spectrogram over any time range, with time, frequency and decibel axes drawn around it. For scripts, for a box with no display, and for handing a picture of a file to something that reads pictures. [More below](#-command-line). |
 | ⚙️ | **One settings dialog** | `Ctrl+,` holds every view control. Show or hide each pane on its own, and a hidden pane gives its space to the others. Or merge the waveform over the spectrogram in one strip, each with its own opacity. |
 | 🗂️ | **A side panel worth reading** | Cards for the file, the WAVE header, Broadcast Wave metadata, tags, cue markers, loudness, per-channel levels, the live analysis parameters and the cursor. |
 | 🔒 | **Read-only by design** | Auriscope never writes to your audio. Your settings persist between runs; your files do not change. The list of files you have opened stays on your machine, and Settings → Files switches it off or clears it. |
@@ -229,6 +229,12 @@ STFT, the same loudness pass, with nothing on screen.
 # Everything the side panel knows, as JSON on stdout
 auriscope-cli analyze take.wav | jq .loudness
 
+# A whole tree of takes, measured in parallel, as a table
+auriscope-cli analyze takes/ --all --csv -o takes.csv
+
+# Checked against a delivery spec; exit 1 if anything failed
+auriscope-cli qc takes/ --spec specs/mine.toml --render-failures bad/
+
 # The waveform and spectrogram as a PNG, with axes drawn around them
 auriscope-cli render take.wav -o take.png
 
@@ -237,21 +243,37 @@ auriscope-cli render take.wav --start 3.44 --end 3.62 --window 1024 -o click.png
 ```
 
 `analyze` writes the same blocks as the capture sidecar — file, WAVE header, Broadcast
-Wave, tags, markers, loudness, per-channel levels — so one reader handles both.
+Wave, tags, markers, loudness, per-channel levels — so one reader handles both. Four
+further passes are there for the asking: `--structure` (lead, tail, pauses, breaths),
+`--segments`, `--defects` (digital silence, clicks, edit seams, truncation) and
+`--spectral` (centroid, rolloff, flatness, codec ceiling, hum). A folder is walked to any
+depth and measured in parallel, one JSON object per line or one CSV row per file.
 
-`render` draws a waveform lane and a spectrogram lane per channel. The waveform is on a
-**decibel** scale by default rather than a linear one, because that is what makes a noise
-floor, a room tone and the gap between two takes visible at all; `--wave-scale linear`
-gives the familiar shape back. `--json out.json` writes the report beside the picture
-with the framing added: the time range, the frequency range, and what one pixel is worth,
-so anything spotted in the image can be turned back into a position in the file.
+`qc` adds the judging: a TOML spec holds the numbers a client agreed to, each finding
+carries a severity and the times it happened, and the exit code tells a failed file from a
+broken run. [**docs/QC_SPECS.md**](docs/QC_SPECS.md) is how to write one.
+
+[**`skills/auriscope-cli/`**](skills/auriscope-cli/) is a Claude Code skill, so a model
+driving the tool knows what it can measure, when to trust a number over a picture, and how
+to write a spec — its references travel with it rather than pointing at a checkout nobody
+else has. `install.sh` puts it in `~/.claude/skills/` when that directory already exists
+(`--skill` to insist, `--no-skill` to refuse); the Arch packages leave a copy under
+`/usr/share/doc/auriscope/skills/` to copy across by hand.
+
+`render` draws a waveform lane and a spectrogram lane per channel — by default the waveform
+drawn *over* the spectrogram as one pane, amplitude with a decibel ruler beside it, exactly
+as the window is usually left sitting. `--no-merge` splits them apart and `--wave-scale db`
+reshapes the envelope into decibels, which is what makes a noise floor and the gap between
+two takes visible at all. `--json out.json` writes the report beside the picture with the
+framing added: the time range, the frequency range, and what one pixel is worth, so
+anything spotted in the image can be turned back into a position in the file.
 
 The axes are the point. A bare spectrogram shows that something happened without saying
 when or at what frequency, which is no use to a reader who cannot click on it — a note
 weeks later, a batch report, or a model asked what is wrong with a file.
 
-[**docs/CLI.md**](docs/CLI.md) is the full reference: every option, the JSON shape, and the
-habits that make the output trustworthy — numbers first, how to pick a window size, and
+[**docs/CLI.md**](docs/CLI.md) is the full reference: every option, the JSON shape, exit
+codes, and the habits that make the output trustworthy — numbers first, how to pick a window size, and
 what an edit seam, a codec ceiling or a digital-silence gap actually look like.
 
 <details>
@@ -264,9 +286,20 @@ what an edit seam, a codec ceiling or a digital-silence gap actually look like.
 | `--channel N` | One channel, counting from 0. The default draws them all, stacked. |
 | `--window` `--overlap` `--window-fn` `--reassign` | The STFT, as in the settings dialog. Overlap takes `75`, `75%` or `3/4`. |
 | `--db MIN:MAX` `--contrast` `--colormap` | Colour mapping, as in the settings dialog. |
-| `--min-hz` `--max-hz` `--linear` | The frequency axis. Logarithmic from 20 Hz by default. |
+| `--min-hz` `--max-hz` `--log` | The frequency axis. Linear by default; `--log` runs from 20 Hz. |
+| `--no-merge` `--merge-opacity` `--wave-scale` `--wave-zoom` | The waveform: its own lane or over the spectrogram, linear or dB, and the window's vertical zoom. |
+| `--spectrum` | A level-against-frequency pane for the whole span, below the time lanes. |
 | `--no-axes` | The bare spectrogram, no margins and no labels, for feeding somewhere else. |
 | `--quiet` | No progress on stderr. Errors still go there; JSON only ever goes to stdout. |
+
+For `analyze` and `qc`:
+
+| Option | |
+| :--- | :--- |
+| `--structure` `--segments` `--defects` `--spectral` `--all` | The passes that are off by default. |
+| `--timeline` | Loudness and level against time, one entry per 100 ms. |
+| `--csv` `--jobs N` | A flat table instead of JSON Lines, and how many files at a time. |
+| `--spec PATH` `--fail-only` `--render-failures DIR` | `qc` only: the spec, the short list, and a picture of each failure. |
 
 Zooming in re-transforms the visible range at one analysis column per pixel column, the
 same way the window does, so a short span is as sharp as the window length allows.

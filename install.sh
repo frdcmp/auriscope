@@ -15,6 +15,8 @@
 #                     that, ignoring any checkout you are standing in
 #   --version vX.Y.Z  a specific release instead of the latest
 #   --force           reinstall even if that version is already installed
+#   --skill           also install the Claude Code skill, even with no ~/.claude
+#   --no-skill        never install it (the default is: only if ~/.claude exists)
 #   --uninstall       remove everything this script installed
 #
 # On Windows, use install.ps1 instead:
@@ -31,10 +33,18 @@ BIN="$PREFIX/bin/auriscope"
 CLI_BIN="$PREFIX/bin/auriscope-cli"
 SHARE="$PREFIX/share"
 CACHE="${XDG_CACHE_HOME:-$HOME/.cache}/auriscope-src"
+# The Claude Code skill: how a model is told what auriscope-cli can do. It
+# lives outside $PREFIX because that is where Claude Code looks, so it is
+# installed only when that directory already exists — finding it is the signal
+# that the tool is wanted here — or when --skill asks outright.
+SKILLS="${CLAUDE_SKILLS_DIR:-$HOME/.claude/skills}"
+SKILL_DIR="$SKILLS/auriscope-cli"
 
 MODE=release
 VERSION=""
 FORCE=0
+# auto: install the skill if ~/.claude/skills is there. force: make it. no: never.
+SKILL=auto
 # --git: build the newest main rather than whatever checkout we are in.
 FRESH=0
 while [ $# -gt 0 ]; do
@@ -44,7 +54,9 @@ while [ $# -gt 0 ]; do
     --uninstall) MODE=uninstall ;;
     --version) VERSION="$2"; shift ;;
     --force) FORCE=1 ;;
-    -h|--help) sed -n '2,22p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    --skill) SKILL=force ;;
+    --no-skill) SKILL=no ;;
+    -h|--help) sed -n '2,24p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "unknown option: $1" >&2; exit 2 ;;
   esac
   shift
@@ -88,6 +100,10 @@ if [ "$MODE" = uninstall ]; then
     "$SHARE/icons/hicolor/scalable/apps/$APP_ID.svg" \
     "$SHARE"/icons/hicolor/*/apps/"$APP_ID".png
   command -v update-desktop-database >/dev/null && update-desktop-database "$SHARE/applications" || true
+  if [ -d "$SKILL_DIR" ]; then
+    rm -rf "${SKILL_DIR:?}"
+    say "Claude Code skill removed from $SKILL_DIR"
+  fi
   say "Auriscope removed from $PREFIX"
   exit 0
 fi
@@ -99,7 +115,7 @@ trap 'rm -rf "$WORK"' EXIT
 
 # Where the binary, the desktop entry, the SVG and the metainfo end up before
 # installing. Both modes fill these four, and `cli` when there is one.
-binary=""; cli=""; desktop=""; svg=""; metainfo=""
+binary=""; cli=""; desktop=""; svg=""; metainfo=""; skill=""
 
 if [ "$MODE" = release ]; then
   need curl; need tar; need sha256sum
@@ -131,6 +147,8 @@ if [ "$MODE" = release ]; then
   desktop="$WORK/auriscope/$APP_ID.desktop"
   svg="$WORK/auriscope/$APP_ID.svg"
   metainfo="$WORK/auriscope/$APP_ID.metainfo.xml"
+  # Releases before the skill existed simply do not carry this directory.
+  skill="$WORK/auriscope/skills/auriscope-cli"
 else
   need cargo
   # Inside a checkout? Build that, unless --git asked for the newest main.
@@ -169,6 +187,7 @@ HINT
   desktop="$src/assets/$APP_ID.desktop"
   svg="$src/assets/$APP_ID.svg"
   metainfo="$src/assets/$APP_ID.metainfo.xml"
+  skill="$src/skills/auriscope-cli"
 fi
 
 # ---- install ----------------------------------------------------------------
@@ -197,10 +216,26 @@ fi
 command -v update-desktop-database >/dev/null 2>&1 && update-desktop-database "$SHARE/applications" || true
 command -v gtk-update-icon-cache >/dev/null 2>&1 && gtk-update-icon-cache -f -t "$SHARE/icons/hicolor" 2>/dev/null || true
 
+# The skill, if this version ships one and this machine wants it. Copied with
+# -L so the references, which are symlinks into docs/ in the repository, land
+# as real files: the installed skill has to stand on its own.
+skill_installed=""
+if [ "$SKILL" != no ] && [ -n "$skill" ] && [ -d "$skill" ] \
+   && { [ "$SKILL" = force ] || [ -d "$SKILLS" ] || [ -d "$HOME/.claude" ]; }; then
+  mkdir -p "$SKILL_DIR"
+  # Replace rather than merge: a reference renamed upstream should not linger.
+  rm -rf "${SKILL_DIR:?}/reference"
+  cp -RL "$skill/." "$SKILL_DIR/"
+  skill_installed="$SKILL_DIR"
+fi
+
 now="$(installed_version)"
 say "Done: $BIN (${now:-${VERSION:-installed}})"
 if [ -x "$CLI_BIN" ]; then
   say "Also: $CLI_BIN (analysis without a window)"
+fi
+if [ -n "$skill_installed" ]; then
+  say "Also: $skill_installed (Claude Code skill; --no-skill to skip)"
 fi
 case ":$PATH:" in
   *":$PREFIX/bin:"*) ;;

@@ -50,6 +50,13 @@ jobs:
           cp assets/io.github.frdcmp.Auriscope.desktop assets/io.github.frdcmp.Auriscope.svg \
              assets/io.github.frdcmp.Auriscope.metainfo.xml dist/auriscope/
           cp assets/fonts/OFL.txt dist/auriscope/OFL-fonts.txt
+          # The Claude Code skill, assembled rather than copied: in the
+          # repository its references are symlinks into docs/, and a symlink
+          # in an archive is no use to whoever unpacks it.
+          mkdir -p dist/auriscope/skills/auriscope-cli/reference
+          cp skills/auriscope-cli/SKILL.md dist/auriscope/skills/auriscope-cli/
+          cp docs/CLI.md docs/QC_SPECS.md specs/starter.toml \
+            dist/auriscope/skills/auriscope-cli/reference/
           tar -C dist -czf ${{ matrix.archive }} auriscope
           sha256sum ${{ matrix.archive }} > ${{ matrix.archive }}.sha256
       - name: Package (Windows)
@@ -61,6 +68,12 @@ jobs:
           Copy-Item target/${{ matrix.target }}/release/auriscope-cli.exe dist/auriscope/
           Copy-Item LICENSE, README.md dist/auriscope/
           Copy-Item assets/fonts/OFL.txt dist/auriscope/OFL-fonts.txt
+          # The skill, assembled from its sources: git for Windows does not
+          # necessarily check the repository's symlinks out as symlinks.
+          New-Item -ItemType Directory -Force dist/auriscope/skills/auriscope-cli/reference | Out-Null
+          Copy-Item skills/auriscope-cli/SKILL.md dist/auriscope/skills/auriscope-cli/
+          Copy-Item docs/CLI.md, docs/QC_SPECS.md, specs/starter.toml `
+            -Destination dist/auriscope/skills/auriscope-cli/reference/
           Compress-Archive -Path dist/auriscope -DestinationPath ${{ matrix.archive }}
           (Get-FileHash ${{ matrix.archive }} -Algorithm SHA256).Hash.ToLower() + "  ${{ matrix.archive }}" |
             Out-File -Encoding ascii ${{ matrix.archive }}.sha256

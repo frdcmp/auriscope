@@ -1287,7 +1287,8 @@ fn loader(
     }
 
     tx.send(Msg::Stage("Loudness".into())).ok();
-    match compute_stats(&audio.channels, audio.sample_rate()) {
+    let planes: Vec<&[f32]> = audio.channels.iter().map(Vec::as_slice).collect();
+    match compute_stats(&planes, audio.sample_rate()) {
         Ok(s) => {
             tx.send(Msg::Stats(s)).ok();
         }

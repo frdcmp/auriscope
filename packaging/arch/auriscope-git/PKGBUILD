@@ -60,4 +60,12 @@ package() {
   install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
   install -Dm644 assets/fonts/OFL.txt "$pkgdir/usr/share/licenses/$pkgname/OFL.txt"
   install -Dm644 README.md "$pkgdir/usr/share/doc/auriscope/README.md"
+  # The Claude Code skill, in the system's docs rather than in anyone's home
+  # directory: a package has no business writing to ~/.claude. Copy it across
+  # yourself with
+  #   cp -r /usr/share/doc/auriscope/skills/auriscope-cli ~/.claude/skills/
+  install -Dm644 skills/auriscope-cli/SKILL.md \
+    "$pkgdir/usr/share/doc/auriscope/skills/auriscope-cli/SKILL.md"
+  install -Dm644 docs/CLI.md docs/QC_SPECS.md specs/starter.toml \
+    -t "$pkgdir/usr/share/doc/auriscope/skills/auriscope-cli/reference"
 }

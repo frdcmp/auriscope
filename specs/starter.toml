@@ -1,0 +1,75 @@
+# A starting spec. Copy it, delete what you do not check, change what you do.
+#
+#   cp specs/starter.toml specs/mine.toml
+#   auriscope-cli qc takes/ --spec specs/mine.toml --csv -o qc.csv
+#
+# Every key is optional and nothing has a hidden default: a rule left out is a
+# rule not checked. A key that is misspelled is an error, not a silent skip.
+#
+# What each one means, and how to choose its number rather than invent it:
+# docs/QC_SPECS.md.
+
+name = "My Delivery"
+
+[format]
+# Exact equality. The cheapest rules here and the most worth having.
+sample_rate_hz = 48000
+channels = 1
+bits_per_sample = 24
+
+[levels]
+true_peak_max_dbtp = -1.0
+
+# Delete both if the job has no loudness target. The tolerance defaults to
+# ±1 LU when a target is given without one.
+integrated_lufs = -23.0
+integrated_tolerance_lu = 1.0
+
+# The band a silent stretch has to sit in. Above it the bed is audible; below
+# it the file has been held to some other tier's standard, which is reported as
+# a `warn` because it is a question rather than a defect.
+silence_max_dbfs = -60.0
+silence_min_dbfs = -65.0
+
+# Which measurement of those stretches the band applies to. The two differ by
+# several decibels on a voice with any rumble under it, and both are measured
+# either way — this only says which one is judged.
+reading = "full_band"
+# reading = "above_80hz"
+
+# The floor under the speech against the silence beside it. Reported as a
+# `note`: on a voice whose room is louder than the bed between the words this
+# is a property of the recording, and failing it would bury the real defects.
+boundary_step_max_db = 6.0
+
+[structure]
+# Milliseconds. Either half of a pair works on its own.
+lead_min_ms = 180.0
+lead_max_ms = 300.0
+tail_min_ms = 180.0
+tail_max_ms = 300.0
+
+# The longer limit applies to a pause with a breath in it.
+pause_max_ms = 700.0
+pause_max_with_event_ms = 1000.0
+
+[defects]
+# For finished files. Source material legitimately carries padding at each end,
+# and pointed at it this rule fails everything, correctly and uselessly.
+max_zero_run_ms = 1.0
+
+# `click_db` is not a limit, it is how far over the local 20 ms RMS a step has
+# to rise to be called a click at all. Keeping it in the spec means the check
+# runs at the sensitivity the spec was written for. Clicks inside speech are
+# never counted: a plosive is not a defect.
+click_db = 32.0
+max_clicks_outside_speech = 0
+
+# Steps in the noise floor away from speech: a join with no crossfade. A new
+# heuristic — calibrate it against accepted material before quoting the number.
+max_seams = 0
+
+allow_clipping = false
+allow_truncation = false
+# Linear amplitude, not decibels. A clean file reads about 0.00001.
+max_dc_offset = 0.001

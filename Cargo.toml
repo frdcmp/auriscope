@@ -49,6 +49,9 @@ rfd = { version = "0.17", default-features = false }
 # PNG encoding, for the window capture the camera button saves. Pure Rust,
 # and only the encoder half of the crate is used.
 png = "0.18"
+# Delivery specs for `auriscope-cli qc`: thresholds a person writes and edits,
+# so the format has comments in it. Small, serde-based and pure Rust.
+toml = { version = "1.1", default-features = false, features = ["parse", "serde"] }
 anyhow = "1.0"
 log = "0.4"
 env_logger = "0.11"

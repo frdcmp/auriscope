@@ -20,6 +20,13 @@
 .PARAMETER Force
     Reinstall even if that version is already installed.
 
+.PARAMETER Skill
+    Also install the Claude Code skill for auriscope-cli, even when there is no
+    .claude directory yet. Without this it is installed only when one exists.
+
+.PARAMETER NoSkill
+    Never install that skill.
+
 .PARAMETER Uninstall
     Remove everything this script installed.
 #>
@@ -27,6 +34,8 @@
 param(
     [string] $Version,
     [switch] $Force,
+    [switch] $Skill,
+    [switch] $NoSkill,
     [switch] $Uninstall
 )
 
@@ -38,6 +47,10 @@ $AppName = 'Auriscope'
 $Root    = Join-Path $env:LOCALAPPDATA "Programs\$AppName"
 $Exe     = Join-Path $Root 'auriscope.exe'
 $Shortcut = Join-Path ([Environment]::GetFolderPath('StartMenu')) "Programs\$AppName.lnk"
+# Claude Code looks here, which is outside the install root; the skill is put
+# there only when that directory already exists, or when -Skill asks for it.
+$ClaudeDir = Join-Path $env:USERPROFILE '.claude'
+$SkillDir  = Join-Path $ClaudeDir 'skills\auriscope-cli'
 
 function Say($msg) { Write-Host $msg -ForegroundColor Cyan }
 function Die($msg) { Write-Host "error: $msg" -ForegroundColor Red; exit 1 }
@@ -68,6 +81,7 @@ function Remove-FromUserPath($dir) {
 if ($Uninstall) {
     if (Test-Path $Root)     { Remove-Item -Recurse -Force $Root }
     if (Test-Path $Shortcut) { Remove-Item -Force $Shortcut }
+    if (Test-Path $SkillDir) { Remove-Item -Recurse -Force $SkillDir }
     Remove-FromUserPath $Root
     Say "$AppName removed."
     exit 0
@@ -161,6 +175,18 @@ try {
     New-Item -ItemType Directory -Force -Path $Root | Out-Null
     Copy-Item -Path (Join-Path $payload '*') -Destination $Root -Recurse -Force
 
+    # The skill, when this release carries one and this machine wants it.
+    $skillSrc = Join-Path $payload 'skills\auriscope-cli'
+    $skillPut = ''
+    if (-not $NoSkill -and (Test-Path $skillSrc) -and ($Skill -or (Test-Path $ClaudeDir))) {
+        # Replaced rather than merged, so a reference renamed upstream does
+        # not linger beside the new ones.
+        if (Test-Path $SkillDir) { Remove-Item -Recurse -Force $SkillDir }
+        New-Item -ItemType Directory -Force -Path $SkillDir | Out-Null
+        Copy-Item -Path (Join-Path $skillSrc '*') -Destination $SkillDir -Recurse -Force
+        $skillPut = $SkillDir
+    }
+
     $shell = New-Object -ComObject WScript.Shell
     $lnk = $shell.CreateShortcut($Shortcut)
     $lnk.TargetPath = $Exe
@@ -172,6 +198,7 @@ try {
     $now = Get-InstalledVersion
     if (-not $now) { $now = $Version }
     Say "Done: $Exe ($now)"
+    if ($skillPut) { Say "Also: $skillPut (Claude Code skill; -NoSkill to skip)" }
 } finally {
     Remove-Item -Recurse -Force $work -ErrorAction SilentlyContinue
 }

@@ -12,7 +12,10 @@
 
 use serde_json::{Value, json};
 
-use crate::analysis::{ChannelStats, FileStats};
+use crate::analysis::defects::{Click, Seam, Truncation, ZeroRun};
+use crate::analysis::segments::{Kind, Segmentation};
+use crate::analysis::spectral::{Spectral, Spread, Tone};
+use crate::analysis::{ChannelStats, FileStats, Timeline};
 use crate::audio::FileInfo;
 
 /// The version the report was written by. Same crate, so the same number the
@@ -58,6 +61,9 @@ pub fn file_report(info: &FileInfo, stats: Option<&FileStats>) -> Value {
         "auriscope": {
             "version": VERSION,
             "analysed_unix": unix_now(),
+            // What the percentile levels were measured over, so a reader can
+            // tell what "exceeded 10% of the time" is ten per cent of.
+            "level_frame_ms": crate::analysis::stats::FRAME_MS,
         },
         "file": file_json(info),
         "wave": wave_json(info),
@@ -80,6 +86,7 @@ pub fn file_json(info: &FileInfo) -> Value {
         "frames": info.frames,
         "duration_secs": rounded(info.duration_secs() as f32, 6),
         "size_bytes": info.file_size,
+        "bitrate_kbps": info.bitrate_kbps().map(|b| rounded(b as f32, 1)),
         "modified_unix": info.modified.and_then(|t| {
             t.duration_since(std::time::UNIX_EPOCH).ok().map(|d| d.as_secs())
         }),
@@ -198,6 +205,9 @@ pub fn loudness_json(stats: Option<&FileStats>) -> Value {
         "correlation": stats.correlation.map(|c| rounded(c, 3)),
         "headroom_db": rounded(-true_peak, 2),
         "crest_factor_db": rounded(peak - rms, 2),
+        // Peak to loudness: how much room the loudest moment keeps over the
+        // average loudness. Small means heavily compressed.
+        "plr_db": rounded(true_peak - stats.integrated_lufs, 2),
     })
 }
 
@@ -224,6 +234,14 @@ pub fn channels_json(stats: Option<&FileStats>, muted: &dyn Fn(usize) -> Option<
                     "dc_offset": rounded(c.dc_offset, 6),
                     "clipped_samples": c.clipped_samples,
                     "clipped_runs": c.clipped_runs,
+                    // Exceeded 10%, 50% and 90% of the time. Digital-zero
+                    // frames take no part, so a padded file still has a floor.
+                    "l10_dbfs": rounded(c.l10_db, 2),
+                    "l50_dbfs": rounded(c.l50_db, 2),
+                    "l90_dbfs": rounded(c.l90_db, 2),
+                    "noise_floor_dbfs": rounded(c.noise_floor_db, 2),
+                    "level_frames": c.level_frames,
+                    "zero_frames": c.zero_frames,
                 });
                 if let (Some(obj), Some(m)) = (v.as_object_mut(), muted(i)) {
                     obj.insert("muted".into(), json!(m));
@@ -232,6 +250,192 @@ pub fn channels_json(stats: Option<&FileStats>, muted: &dyn Fn(usize) -> Option<
             })
             .collect::<Vec<_>>()
     )
+}
+
+/// Loudness and level against time. Its own block because it is long: a
+/// two-minute file is more than a thousand entries per series, which is worth
+/// having and not worth printing unless it was asked for.
+pub fn timeline_json(stats: &FileStats) -> Value {
+    let t: &Timeline = &stats.timeline;
+    let series = |v: &[Option<f32>]| -> Value {
+        json!(
+            v.iter()
+                .map(|x| x.map_or(Value::Null, |v| rounded(v, 2)))
+                .collect::<Vec<_>>()
+        )
+    };
+    let nch = t.channels.len();
+    json!({
+        "block_secs": rounded(t.block_secs, 4),
+        "blocks": t.momentary_lufs.len(),
+        "momentary_lufs": series(&t.momentary_lufs),
+        "short_term_lufs": series(&t.short_term_lufs),
+        "channels": t
+            .channels
+            .iter()
+            .enumerate()
+            .map(|(i, c)| json!({
+                "index": i,
+                "name": channel_name(i, nch),
+                "rms_dbfs": c.rms_db.iter().map(|v| rounded(*v, 2)).collect::<Vec<_>>(),
+                "peak_dbfs": c.peak_db.iter().map(|v| rounded(*v, 2)).collect::<Vec<_>>(),
+            }))
+            .collect::<Vec<_>>(),
+    })
+}
+
+/// Where the speech is, how long the silences are, and what sits in them.
+pub fn structure_json(seg: &Segmentation, sample_rate: u32) -> Value {
+    let st = &seg.structure;
+    json!({
+        "leading_silence_secs": st.leading_silence_secs,
+        "trailing_silence_secs": st.trailing_silence_secs,
+        // Measured to the first and last sample that is not zero, which is a
+        // different question from where the speech starts and a different
+        // answer on a file with digital padding.
+        "leading_nonzero_secs": st.leading_nonzero_secs,
+        "trailing_nonzero_secs": st.trailing_nonzero_secs,
+        "speech_secs": st.speech_secs,
+        "speech_ratio": rounded(st.speech_ratio, 4),
+        "longest_pause_secs": st
+            .pauses
+            .iter()
+            .map(|p| p.duration_secs())
+            .fold(0.0f64, f64::max),
+        "pauses": st
+            .pauses
+            .iter()
+            .map(|p| json!({
+                "start_secs": p.start_secs,
+                "end_secs": p.end_secs,
+                "duration_secs": p.duration_secs(),
+                "event_inside": p.event_inside,
+            }))
+            .collect::<Vec<_>>(),
+        // An estimate, and a property of how the file was made rather than a
+        // fault in it: the quiet moments inside speech against the silence
+        // beside them.
+        "boundary_step_db": rounded(st.boundary_step_db, 2),
+        "floor_dbfs": rounded(seg.floor_db, 2),
+        "speech_threshold_dbfs": rounded(seg.threshold_db, 2),
+        "sample_rate_hz": sample_rate,
+    })
+}
+
+/// Every stretch of the file, in order.
+pub fn segments_json(seg: &Segmentation) -> Value {
+    json!(
+        seg.segments
+            .iter()
+            .map(|s| json!({
+                "kind": match s.kind {
+                    Kind::Speech => "speech",
+                    Kind::Silence => "silence",
+                },
+                "start_secs": s.start_secs,
+                "end_secs": s.end_secs,
+                "duration_secs": s.duration_secs(),
+                "rms_dbfs": rounded(s.rms_db, 2),
+                "rms_above_80hz_dbfs": rounded(s.rms_above_80hz_db, 2),
+            }))
+            .collect::<Vec<_>>()
+    )
+}
+
+/// What is wrong with the file, where, and by how much.
+pub fn defects_json(
+    zero: &[ZeroRun],
+    clicks: &[Click],
+    seams: &[Seam],
+    truncation: Truncation,
+    speech_at: &dyn Fn(f64) -> bool,
+    sample_rate: u32,
+) -> Value {
+    let sr = sample_rate.max(1) as f64;
+    json!({
+        "digital_silence": {
+            "count": zero.len(),
+            "total_secs": zero.iter().map(|z| z.len()).sum::<usize>() as f64 / sr,
+            "runs": zero
+                .iter()
+                .map(|z| json!({
+                    "start_secs": z.start_frame as f64 / sr,
+                    "end_secs": z.end_frame as f64 / sr,
+                    "duration_secs": z.len() as f64 / sr,
+                }))
+                .collect::<Vec<_>>(),
+        },
+        "clicks": clicks
+            .iter()
+            .map(|c| {
+                let secs = c.frame as f64 / sr;
+                json!({
+                    "secs": secs,
+                    "ratio_db": rounded(c.ratio_db, 1),
+                    // Inside a word this is a candidate for a mouth click or a
+                    // plosive; outside one it is an edit. The metric cannot
+                    // tell them apart, so it says where it happened instead.
+                    "in_speech": speech_at(secs),
+                })
+            })
+            .collect::<Vec<_>>(),
+        "seams": seams
+            .iter()
+            .map(|s| json!({
+                "secs": s.frame as f64 / sr,
+                "floor_step_db": rounded(s.floor_step_db, 2),
+            }))
+            .collect::<Vec<_>>(),
+        "truncation": {
+            "head": truncation.head,
+            "tail": truncation.tail,
+            "head_dbfs": rounded(truncation.head_db, 2),
+            "tail_dbfs": rounded(truncation.tail_db, 2),
+        },
+    })
+}
+
+fn spread_json(s: Spread, places: i32) -> Value {
+    json!({
+        "median": rounded(s.median, places),
+        "p10": rounded(s.p10, places),
+        "p90": rounded(s.p90, places),
+    })
+}
+
+fn tone_json(t: &Tone) -> Value {
+    json!({
+        "hz": rounded(t.hz, 1),
+        "level_db": rounded(t.level_db, 1),
+        "prominence_db": rounded(t.prominence_db, 1),
+    })
+}
+
+/// What the spectrum says: shape, ceiling, and any tone standing out of it.
+pub fn spectral_json(s: &Spectral) -> Value {
+    json!({
+        "window_size": s.window_size,
+        "frames": s.frames,
+        "centroid_hz": spread_json(s.centroid_hz, 1),
+        "rolloff85_hz": spread_json(s.rolloff85_hz, 1),
+        "rolloff95_hz": spread_json(s.rolloff95_hz, 1),
+        // 0 is a pure tone, 1 is white noise.
+        "flatness": spread_json(s.flatness, 4),
+        "cutoff_hz": rounded(s.cutoff_hz, 1),
+        // A heuristic with a stated threshold, not a proof: a ceiling below
+        // three quarters of Nyquist with a wall in front of it.
+        "transcode_suspect": s.transcode_suspect,
+        "hum": s.hum.as_ref().map(tone_json),
+        "hum_harmonics": s.hum_harmonics.iter().map(tone_json).collect::<Vec<_>>(),
+        "bands_third_octave": s
+            .bands
+            .iter()
+            .map(|b| json!({
+                "centre_hz": rounded(b.centre_hz, 1),
+                "level_db": rounded(b.level_db, 1),
+            }))
+            .collect::<Vec<_>>(),
+    })
 }
 
 #[cfg(test)]
