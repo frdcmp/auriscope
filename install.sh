@@ -17,6 +17,7 @@
 #   --force           reinstall even if that version is already installed
 #   --skill           also install the Claude Code skill, even with no ~/.claude
 #   --no-skill        never install it (the default is: only if ~/.claude exists)
+#   --no-path         do not touch your shell rc, just warn if PATH is missing
 #   --uninstall       remove everything this script installed
 #
 # On Windows, use install.ps1 instead:
@@ -47,22 +48,57 @@ FORCE=0
 SKILL=auto
 # --git: build the newest main rather than whatever checkout we are in.
 FRESH=0
+# Whether we may add $PREFIX/bin to the shell rc when it is missing from PATH.
+PATH_FIX=yes
+
+say() { printf '\033[1m%s\033[0m\n' "$*"; }
+die() { echo "error: $*" >&2; exit 1; }
+need() { command -v "$1" >/dev/null 2>&1 || die "$1 is required"; }
+
+# Piped through `bash`, this script has no file to read its own header out of,
+# so the help lives here rather than in a `sed` over "$0".
+usage() {
+  sed 's/^  //' <<'HELP'
+  Install or update Auriscope on Linux, for one user, no root.
+
+    curl -fsSL https://raw.githubusercontent.com/frdcmp/auriscope/main/install.sh | bash
+
+  Options, after `bash -s --` when piping:
+
+    --source          build from source instead: the checkout this script sits
+                      in, or a clone of `main` in ~/.cache/auriscope-src
+    --git             bleeding edge: always fetch the newest `main` and build
+                      that, ignoring any checkout you are standing in
+    --version vX.Y.Z  a specific release instead of the latest
+    --force           reinstall even if that version is already installed
+    --skill           also install the Claude Code skill, even with no ~/.claude
+    --no-skill        never install it (the default is: only if ~/.claude exists)
+    --no-path         do not touch your shell rc, just warn if PATH is missing
+    --uninstall       remove everything this script installed
+
+  On Windows, use install.ps1 instead:
+    irm https://raw.githubusercontent.com/frdcmp/auriscope/main/install.ps1 | iex
+HELP
+}
+
 while [ $# -gt 0 ]; do
   case "$1" in
     --source) MODE=source ;;
     --git) MODE=source; FRESH=1 ;;
     --uninstall) MODE=uninstall ;;
-    --version) VERSION="$2"; shift ;;
+    --version)
+      [ $# -ge 2 ] || die "--version needs a tag, for example: --version v0.2.0"
+      VERSION="$2"; shift ;;
     --force) FORCE=1 ;;
     --skill) SKILL=force ;;
     --no-skill) SKILL=no ;;
-    -h|--help) sed -n '2,24p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    --no-path) PATH_FIX=no ;;
+    -h|--help) usage; exit 0 ;;
     *) echo "unknown option: $1" >&2; exit 2 ;;
   esac
   shift
 done
 
-say() { printf '\033[1m%s\033[0m\n' "$*"; }
 # The version already installed, or empty.
 #
 # Builds before 0.1.1 have no --version flag: they take the argument as a file
@@ -80,8 +116,49 @@ installed_version() {
 bare_version() { installed_version | awk '{print $1}'; }
 # A build from git rather than a release; the printed line carries a suffix.
 is_dev_build() { case "$(installed_version)" in *\(dev*) return 0 ;; *) return 1 ;; esac; }
-die() { echo "error: $*" >&2; exit 1; }
-need() { command -v "$1" >/dev/null 2>&1 || die "$1 is required"; }
+
+# The file an interactive shell of $SHELL actually reads, for the PATH line.
+shell_rc() {
+  case "$(basename "${SHELL:-}")" in
+    zsh)  echo "${ZDOTDIR:-$HOME}/.zshrc" ;;
+    bash) echo "$HOME/.bashrc" ;;
+    fish) echo "$HOME/.config/fish/config.fish" ;;
+    *)    echo "$HOME/.profile" ;;
+  esac
+}
+PATH_MARK="# >>> auriscope >>>"
+PATH_MARK_END="# <<< auriscope <<<"
+# $PREFIX/bin must be on PATH or `auriscope-cli` is unreachable and the window
+# opens only from the launcher. Piped from curl there is no stdin left to ask
+# on, so this writes the line and says so plainly; --no-path only warns.
+ensure_path() {
+  case ":$PATH:" in *":$PREFIX/bin:"*) return 0 ;; esac
+  local rc; rc="$(shell_rc)"
+  if [ "$PATH_FIX" = no ]; then
+    echo "note: $PREFIX/bin is not on your PATH; add it to $rc to run auriscope in a terminal."
+    return 0
+  fi
+  if [ -f "$rc" ] && grep -qF "$PATH_MARK" "$rc"; then
+    say "$PREFIX/bin is already in $rc — open a new terminal, or: source $rc"
+    return 0
+  fi
+  # Write $HOME rather than the expanded path, so the line survives a move.
+  local dir="$PREFIX/bin"
+  case "$dir" in "$HOME"/*) dir="\$HOME${dir#"$HOME"}" ;; esac
+  mkdir -p "$(dirname "$rc")"
+  if [ "$(basename "${SHELL:-}")" = fish ]; then
+    printf '\n%s\nfish_add_path %s\n%s\n' "$PATH_MARK" "$dir" "$PATH_MARK_END" >> "$rc"
+  else
+    {
+      printf '\n%s\n' "$PATH_MARK"
+      printf 'case ":$PATH:" in\n'
+      printf '  *":%s:"*) ;;\n' "$dir"
+      printf '  *) export PATH="%s:$PATH" ;;\n' "$dir"
+      printf 'esac\n%s\n' "$PATH_MARK_END"
+    } >> "$rc"
+  fi
+  say "Added $dir to your PATH in $rc — open a new terminal, or: source $rc"
+}
 
 case "$(uname -s)" in
   Linux) ;;
@@ -103,6 +180,11 @@ if [ "$MODE" = uninstall ]; then
   if [ -d "$SKILL_DIR" ]; then
     rm -rf "${SKILL_DIR:?}"
     say "Claude Code skill removed from $SKILL_DIR"
+  fi
+  rc="$(shell_rc)"
+  if [ -f "$rc" ] && grep -qF "$PATH_MARK" "$rc"; then
+    sed -i "/^$PATH_MARK\$/,/^$PATH_MARK_END\$/d" "$rc"
+    say "PATH line removed from $rc"
   fi
   say "Auriscope removed from $PREFIX"
   exit 0
@@ -132,6 +214,7 @@ if [ "$MODE" = release ]; then
   # exactly how you go back to a tested version.
   if [ "$FORCE" = 0 ] && [ -n "$have" ] && [ "v$have" = "$VERSION" ] && ! is_dev_build; then
     say "Auriscope $have is already installed and current."
+    ensure_path
     exit 0
   fi
   archive="auriscope-$VERSION-x86_64-linux.tar.gz"
@@ -237,7 +320,4 @@ fi
 if [ -n "$skill_installed" ]; then
   say "Also: $skill_installed (Claude Code skill; --no-skill to skip)"
 fi
-case ":$PATH:" in
-  *":$PREFIX/bin:"*) ;;
-  *) echo "note: $PREFIX/bin is not on your PATH; the launcher entry works regardless." ;;
-esac
+ensure_path

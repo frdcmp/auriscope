@@ -137,6 +137,9 @@ $haveVersion = if ($have) { ($have -split '\s+')[0] } else { $null }
 $haveIsDev   = $have -and $have -match '\(dev'
 if (-not $Force -and $haveVersion -and "v$haveVersion" -eq $Version -and -not $haveIsDev) {
     Say "$AppName $haveVersion is already installed and current."
+    # Still check PATH: a rerun is how someone whose PATH lost the entry
+    # gets it back, and the early exit used to skip this entirely.
+    Add-ToUserPath $Root
     exit 0
 }
 
