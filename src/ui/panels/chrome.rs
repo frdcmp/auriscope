@@ -10,6 +10,13 @@ use crate::ui::fonts;
 use crate::ui::icon;
 
 const TITLEBAR_BG: Color32 = Color32::from_rgb(30, 30, 36);
+/// Height of the title bar, and the width its three window buttons take at
+/// the right end of it. The resize borders need both: they keep off the
+/// buttons rather than sitting over them, since a press that was meant for
+/// Close should not turn into a resize.
+const TITLEBAR_H: f32 = 34.0;
+const BUTTON_W: f32 = 34.0;
+const BUTTONS_W: f32 = 3.0 * BUTTON_W;
 const CLOSE_HOVER: Color32 = Color32::from_rgb(224, 27, 36);
 enum WindowIcon {
     Minimize,
@@ -87,12 +94,12 @@ fn window_button(
 /// double-click-to-maximize, plus a north resize grip.
 pub fn title_bar(app: &mut App, root: &mut egui::Ui) {
     egui::Panel::top("titlebar")
-        .exact_size(34.0)
+        .exact_size(TITLEBAR_H)
         .frame(egui::Frame::NONE.fill(TITLEBAR_BG))
         .show(root, |ui| {
             let ctx = ui.ctx().clone();
             let full = ui.available_rect_before_wrap();
-            let bw = 34.0;
+            let bw = BUTTON_W;
             let r_close =
                 Rect::from_min_max(pos2(full.right() - bw, full.top()), full.right_bottom());
             let r_max = r_close.translate(vec2(-bw, 0.0));
@@ -126,6 +133,7 @@ pub fn title_bar(app: &mut App, root: &mut egui::Ui) {
             );
             if drag.drag_started() {
                 ctx.send_viewport_cmd(egui::ViewportCommand::StartDrag);
+                forget_pointer(&ctx);
             }
             if drag.double_clicked() {
                 ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(!maximized));
@@ -150,11 +158,45 @@ pub fn title_bar(app: &mut App, root: &mut egui::Ui) {
         });
 }
 
-/// Client-side window resize borders, drawn as a foreground overlay.
+/// Forget that a pointer button is down, having just handed the pointer to
+/// the compositor.
 ///
-/// These deliberately do **not** live inside any panel. `allocate_*` inside a
-/// panel takes space out of that panel's own layout, which is what collapses
-/// it; `Ui::interact` on an overlay allocates nothing and disturbs nothing.
+/// A window move or resize belongs to the compositor for the rest of the
+/// gesture, and on Wayland the button release is never sent on to us. egui
+/// would go on believing the button is held and swallow the next press as
+/// part of a drag that never ended — which is why dragging the window worked
+/// only every other time. Upstream bug, still open:
+/// <https://github.com/emilk/egui/issues/7959>.
+///
+/// Only ever called where we ask for that grab. A standing check for a held
+/// button — say, whenever the window is not focused — looks like the same
+/// thing and is not: clicking an unfocused window delivers the press before
+/// egui has registered the focus, and clearing it there kills the first drag
+/// of every slider in the window.
+fn forget_pointer(ctx: &egui::Context) {
+    ctx.input_mut(|i| i.pointer = Default::default());
+}
+
+/// Client-side window resize borders.
+///
+/// One `Area` per strip, each claiming exactly its strip. egui finds the
+/// layer under the pointer by the rect an area's content claims, and that
+/// rect has caught this code out twice in opposite directions:
+///
+/// * All eight strips in one area, interacting without allocating, left that
+///   area zero-size. Nothing was ever hit-tested, so the edges were inert and
+///   the window could not be resized at all.
+/// * Allocating each strip with `allocate_rect` and absolute coordinates does
+///   not tell the area where it is either: the area grew from its layout
+///   origin to swallow the rect, so the east strip claimed 600 points of the
+///   window and ate the transport bar's sliders.
+///
+/// Hence `allocate_exact_size` at the area's own `fixed_pos`: the only
+/// arrangement where the area's rect and the strip are the same rectangle.
+///
+/// They keep off the window buttons in the top-right corner: the north edge
+/// stops short of them, the east edge starts below the title bar, and there
+/// is no north-east corner. A press meant for Close is not a resize.
 pub fn resize_borders(ctx: &egui::Context) {
     use egui::CursorIcon as Cur;
     use egui::viewport::ResizeDirection as Dir;
@@ -172,12 +214,12 @@ pub fn resize_borders(ctx: &egui::Context) {
     }
     let (l, rt, t, b) = (r.left(), r.right(), r.top(), r.bottom());
 
-    // Edges first, corners last: within a layer, the widget added later wins
-    // the pointer, and a corner must beat the two edges it overlaps.
-    let regions: [(&str, Rect, Dir, Cur); 8] = [
+    // Edges first, corners last: a later area sits above an earlier one, and
+    // a corner has to beat the two edges it overlaps.
+    let regions: [(&str, Rect, Dir, Cur); 7] = [
         (
             "rz-n",
-            Rect::from_min_max(pos2(l, t), pos2(rt, t + EDGE)),
+            Rect::from_min_max(pos2(l, t), pos2(rt - BUTTONS_W, t + EDGE)),
             Dir::North,
             Cur::ResizeNorth,
         ),
@@ -195,7 +237,7 @@ pub fn resize_borders(ctx: &egui::Context) {
         ),
         (
             "rz-e",
-            Rect::from_min_max(pos2(rt - EDGE, t), pos2(rt, b)),
+            Rect::from_min_max(pos2(rt - EDGE, t + TITLEBAR_H), pos2(rt, b)),
             Dir::East,
             Cur::ResizeEast,
         ),
@@ -204,12 +246,6 @@ pub fn resize_borders(ctx: &egui::Context) {
             Rect::from_min_max(pos2(l, t), pos2(l + CORNER, t + CORNER)),
             Dir::NorthWest,
             Cur::ResizeNorthWest,
-        ),
-        (
-            "rz-ne",
-            Rect::from_min_max(pos2(rt - CORNER, t), pos2(rt, t + CORNER)),
-            Dir::NorthEast,
-            Cur::ResizeNorthEast,
         ),
         (
             "rz-sw",
@@ -225,21 +261,21 @@ pub fn resize_borders(ctx: &egui::Context) {
         ),
     ];
 
-    egui::Area::new(egui::Id::new("resize-borders"))
-        .order(egui::Order::Foreground)
-        .fixed_pos(r.min)
-        .interactable(true)
-        .show(ctx, |ui| {
-            ui.set_clip_rect(r);
-            for (id, rect, dir, cursor) in regions {
-                let resp = ui.interact(rect, egui::Id::new(id), Sense::drag());
+    for (id, rect, dir, cursor) in regions {
+        egui::Area::new(egui::Id::new(id))
+            .order(egui::Order::Foreground)
+            .fixed_pos(rect.min)
+            .interactable(true)
+            .show(ctx, |ui| {
+                let (_, resp) = ui.allocate_exact_size(rect.size(), Sense::drag());
                 if resp.hovered() || resp.dragged() {
                     ui.ctx().set_cursor_icon(cursor);
                 }
                 if resp.drag_started() {
                     ui.ctx()
                         .send_viewport_cmd(egui::ViewportCommand::BeginResize(dir));
+                    forget_pointer(ui.ctx());
                 }
-            }
-        });
+            });
+    }
 }

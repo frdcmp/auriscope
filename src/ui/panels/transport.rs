@@ -23,10 +23,142 @@ use super::theme::{ACCENT, BAD, GOOD, KEY, VAL, WARN};
 /// widget puts everything on one centre line.
 const ROW_H: f32 = 26.0;
 
+/// The narrowest a mixer slider's track may be squeezed to when the row runs
+/// short of room. Below this the grab has nowhere left to travel.
+const SLIDER_W_MIN: f32 = 56.0;
+
+/// And the narrowest the output meter's bars may be drawn. A meter's width is
+/// its resolution, so it is the first thing asked to give: a coarser bar
+/// still says what it has to, where a slider with no travel does not.
+const METER_W_MIN: f32 = 104.0;
+
+/// What the bar wears at the width it has been given.
+///
+/// One line cannot hold every control on a narrow window, so the row sheds in
+/// order of what is least missed — and what it sheds goes into the ⋯ menu
+/// rather than out of reach. The output meter is the exception: a live bar has
+/// no form in a menu, and the sidebar draws one per channel anyway.
+#[derive(Clone, Copy, PartialEq)]
+struct Dress {
+    /// The camera and help-mode buttons stand in the bar.
+    chrome: bool,
+    /// The Follow box stands in the bar.
+    follow: bool,
+    /// The output meter is drawn at all.
+    meter: bool,
+    /// The gain and pan sliders stand in the bar.
+    mixer: bool,
+}
+
+/// What each step of shedding gives back, net — net because the first step
+/// also has to pay for the ⋯ button it brings with it. Measured from the bar
+/// itself: these are widget widths in points, so they hold at any interface
+/// scale, and the app brings its own font rather than the desktop's.
+const SHED_CHROME: f32 = 45.0;
+const SHED_FOLLOW: f32 = 88.0;
+const SHED_METER: f32 = 200.0;
+const SHED_MIXER: f32 = 425.0;
+
+/// Room a control has to gain back before it returns to the bar. A window
+/// parked on the width where a step happens would otherwise sit between two
+/// dresses, and the bar would flicker as the measurement rounded one way and
+/// then the other.
+const DRESS_HYST: f32 = 12.0;
+
+impl Dress {
+    const FULL: Self = Self {
+        chrome: true,
+        follow: true,
+        meter: true,
+        mixer: true,
+    };
+
+    /// The dress for a group that has `room` to stand in and wants `full`
+    /// points at full dress. `elastic` is how much the meter and sliders can
+    /// give up before anything has to go, and `was` is last frame's dress,
+    /// which is what the hysteresis is measured against.
+    fn choose(full: f32, room: f32, elastic: f32, was: Self) -> Self {
+        let mut d = Self::FULL;
+        let mut need = full;
+        let mut give = elastic;
+        // Each test asks whether the row fits without shedding the control on
+        // the line below it. One already shed has to earn its way back.
+        let fits = |need: f32, give: f32, shown: bool| {
+            need - give + if shown { 0.0 } else { DRESS_HYST } <= room
+        };
+        if fits(need, give, was.chrome) {
+            return d;
+        }
+        d.chrome = false;
+        need -= SHED_CHROME;
+        if fits(need, give, was.follow) {
+            return d;
+        }
+        d.follow = false;
+        need -= SHED_FOLLOW;
+        if fits(need, give, was.meter) {
+            return d;
+        }
+        d.meter = false;
+        need -= SHED_METER;
+        give -= METER_W - METER_W_MIN;
+        if fits(need, give, was.mixer) {
+            return d;
+        }
+        d.mixer = false;
+        d
+    }
+
+    /// What this dress leaves out of the bar, in points: added back to the
+    /// measured width so that what is remembered is always the full dress's,
+    /// whatever was on show when it was measured.
+    fn shed_width(self) -> f32 {
+        (if self.chrome { 0.0 } else { SHED_CHROME })
+            + (if self.follow { 0.0 } else { SHED_FOLLOW })
+            + (if self.meter { 0.0 } else { SHED_METER })
+            + (if self.mixer { 0.0 } else { SHED_MIXER })
+    }
+
+    /// Whether anything that has somewhere else to be has been shed, which is
+    /// when the ⋯ menu appears.
+    fn overflowing(self) -> bool {
+        !(self.chrome && self.follow && self.mixer)
+    }
+}
+
+/// What the bar carries from one frame to the next: the width the right-hand
+/// group wants at full dress, and the dress it settled on. Both are known
+/// only once the group has been drawn, so they are read back a frame later —
+/// and the only thing that moves them is a resize, which is not a frame you
+/// can catch the bar out on.
+#[derive(Clone, Copy)]
+struct BarFit {
+    full: f32,
+    dress: Dress,
+}
+
+/// Where [`BarFit`] is kept between frames.
+fn bar_fit_id() -> egui::Id {
+    egui::Id::new("transport-bar-fit")
+}
+
 pub fn top_bar(app: &mut App, root: &mut egui::Ui) {
     egui::Panel::top("top").show(root, |ui| {
         ui.horizontal(|ui| {
             ui.set_height(ROW_H);
+            // The mixer sliders are the row's only elastic parts: everything
+            // else is a button, a checkbox or a fixed-width readout. When the
+            // window is too narrow for all of it they give up their width
+            // first, and the selection readout gives up its detail, rather
+            // than the right-hand group overrunning the controls to its left.
+            let full_slider = ui.spacing().slider_width;
+            let (last_full, last_dress) =
+                match ui.ctx().data(|d| d.get_temp::<BarFit>(bar_fit_id())) {
+                    Some(f) => (f.full, f.dress),
+                    None => (0.0, Dress::FULL),
+                };
+            let slider_give = 2.0 * (full_slider - SLIDER_W_MIN);
+            let elastic = (METER_W - METER_W_MIN) + slider_give;
             if ui.button("Open…").on_hover_text("Ctrl+O").clicked() {
                 app.pick_file();
             }
@@ -79,86 +211,261 @@ pub fn top_bar(app: &mut App, root: &mut egui::Ui) {
                 app.loop_enabled = loop_on;
                 app.apply_loop();
             }
+            // The dress is settled here, against the room left by the
+            // controls that are always drawn and before the readout that is
+            // not — which is why a long file's wider clock sheds a control
+            // rather than overrunning one.
+            let room = ui.available_width();
+            let dress = Dress::choose(last_full, room, elastic, last_dress);
+            let dressed = (last_full - dress.shed_width()).max(0.0);
             // Mid-drag the ruler range is still the old one: the range only
             // lands when the button comes up. The live selection is what the
             // pointer is describing, so the readout follows that and counts up
             // as the drag is drawn. Ordered, because a drag can run backwards.
             if let Some((a, b)) = app.selection.or(app.range) {
                 let (a, b) = (a.min(b) / sr, a.max(b) / sr);
-                ui.label(
-                    RichText::new(format!(
-                        "{} – {}  ({})",
-                        fmt_time_field(a, total),
-                        fmt_time_field(b, total),
-                        fmt_time_field(b - a, total)
-                    ))
-                    .monospace()
-                    .color(Color32::from_gray(170)),
-                );
+                // The controls have first claim on the room: they are
+                // controls, this is a readout. It may put the meter and the
+                // sliders under the squeeze but never off the bar, so what it
+                // may take is what is left once they are at their narrowest.
+                let squeezable = if dress.meter {
+                    METER_W - METER_W_MIN
+                } else {
+                    0.0
+                } + if dress.mixer { slider_give } else { 0.0 };
+                let spare = room - (dressed - squeezable) - ui.spacing().item_spacing.x;
+                selection_readout(ui, a, b, total, spare);
             }
 
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            // Spend what give there is on the deficit, the meter before the
+            // sliders, and stop as soon as the row fits.
+            let mut short_by = (dressed - ui.available_width()).max(0.0);
+            let meter_squeeze = if dress.meter {
+                short_by.min(METER_W - METER_W_MIN)
+            } else {
+                0.0
+            };
+            let meter_w = METER_W - meter_squeeze;
+            short_by -= meter_squeeze;
+            let slider_w = (full_slider - short_by / 2.0).clamp(SLIDER_W_MIN, full_slider);
+            let group = ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                ui.spacing_mut().slider_width = slider_w;
                 // The value boxes sit in a right-to-left layout, so anything
                 // that changes their width shoves the rest of the bar sideways
                 // as you drag. Monospace digits plus a padded, fixed-length
                 // format keep each box the same size at every value.
                 ui.style_mut().drag_value_text_style = egui::TextStyle::Monospace;
-                // Always signed: a bare "0.0" beside a slider that runs both
-                // ways says nothing about which side of neutral you are on.
-                let gain_tint = gain_tint(app.settings.gain_db);
-                let gain = egui::Slider::new(&mut app.settings.gain_db, -60.0..=12.0)
-                    .suffix(" dB")
-                    .custom_formatter(|n, _| format!("{n:>+5.1}"))
-                    .custom_parser(|s| s.trim().parse().ok());
-                let mut gain_changed = tinted_slider(ui, gain_tint, gain).changed();
-                if reset_label(ui, "Gain", "+0.0 dB").clicked() {
-                    app.settings.gain_db = 0.0;
-                    gain_changed = true;
-                }
-                if gain_changed && let Some(e) = &app.engine {
-                    e.shared.set_gain(db_to_amp(app.settings.gain_db));
-                }
-                let pan_tint = pan_tint(app.settings.pan);
-                let pan = egui::Slider::new(&mut app.settings.pan, -1.0..=1.0)
-                    .custom_formatter(|n, _| format!("{n:>+5.2}"))
-                    .custom_parser(|s| s.trim().parse().ok());
-                let mut pan_changed = tinted_slider(ui, pan_tint, pan).changed();
-                if reset_label(ui, "Pan", "centre").clicked() {
-                    app.settings.pan = 0.0;
-                    pan_changed = true;
-                }
-                if pan_changed && let Some(e) = &app.engine {
-                    e.shared.set_pan(app.settings.pan);
-                }
+                sidebar_toggle(app, ui);
                 ui.separator();
-                out_meter(app, ui);
-                ui.separator();
+                if dress.mixer {
+                    gain_control(app, ui);
+                    pan_control(app, ui);
+                    ui.separator();
+                }
+                if dress.meter {
+                    out_meter(app, ui, meter_w);
+                    ui.separator();
+                }
                 if settings_button(ui, app.settings_open)
                     .on_hover_text("Settings (Ctrl+,)")
                     .clicked()
                 {
                     app.settings_open = !app.settings_open;
                 }
-                camera_button(app, ui);
-                if help::toggle_button(ui, app.help_mode, vec2(28.0, ROW_H))
-                    .on_hover_text(if app.help_mode {
-                        "Help mode on: hover anything labelled to read what it means (F1)"
-                    } else {
-                        "Help mode (F1)"
-                    })
-                    .clicked()
-                {
-                    app.help_mode = !app.help_mode;
+                if dress.chrome {
+                    camera_button(app, ui);
+                    help_button(app, ui);
                 }
-                ui.separator();
-                let follow = ui
-                    .checkbox(&mut app.settings.follow_playhead, "Follow")
-                    .on_hover_text("Keep the playhead in view while playing");
-                help::offer_response(ui, &follow, Topic::FollowPlayhead);
+                if dress.overflowing() {
+                    overflow_menu(app, ui, dress);
+                }
+                if dress.follow {
+                    ui.separator();
+                    follow_box(app, ui);
+                }
                 update_notice(app, ui);
             });
+            // What it would have wanted at full size — not what it took —
+            // so that a squeezed slider cannot read as room next frame and
+            // set the two widths oscillating.
+            // What the group would have wanted at full dress: what it took,
+            // plus the squeeze it was put under, plus what it was not
+            // wearing. Dress-independent by construction, so the dress it
+            // decides next frame cannot feed on the one it was drawn in.
+            let full = group.response.rect.width()
+                + (METER_W - meter_w)
+                + if dress.mixer {
+                    2.0 * (full_slider - slider_w)
+                } else {
+                    0.0
+                }
+                + dress.shed_width();
+            ui.ctx()
+                .data_mut(|d| d.insert_temp(bar_fit_id(), BarFit { full, dress }));
         });
     });
+}
+
+/// The gain slider and its label, which resets it. Drawn in the bar, or in
+/// the ⋯ menu when the bar has no room for it.
+///
+/// Always signed: a bare "0.0" beside a slider that runs both ways says
+/// nothing about which side of neutral you are on.
+fn gain_control(app: &mut App, ui: &mut egui::Ui) {
+    let tint = gain_tint(app.settings.gain_db);
+    let gain = egui::Slider::new(&mut app.settings.gain_db, -60.0..=12.0)
+        .suffix(" dB")
+        .custom_formatter(|n, _| format!("{n:>+5.1}"))
+        .custom_parser(|s| s.trim().parse().ok());
+    let mut changed = tinted_slider(ui, tint, gain).changed();
+    if reset_label(ui, "Gain", "+0.0 dB").clicked() {
+        app.settings.gain_db = 0.0;
+        changed = true;
+    }
+    if changed && let Some(e) = &app.engine {
+        e.shared.set_gain(db_to_amp(app.settings.gain_db));
+    }
+}
+
+/// The pan slider and its label, which centres it.
+fn pan_control(app: &mut App, ui: &mut egui::Ui) {
+    let tint = pan_tint(app.settings.pan);
+    let pan = egui::Slider::new(&mut app.settings.pan, -1.0..=1.0)
+        .custom_formatter(|n, _| format!("{n:>+5.2}"))
+        .custom_parser(|s| s.trim().parse().ok());
+    let mut changed = tinted_slider(ui, tint, pan).changed();
+    if reset_label(ui, "Pan", "centre").clicked() {
+        app.settings.pan = 0.0;
+        changed = true;
+    }
+    if changed && let Some(e) = &app.engine {
+        e.shared.set_pan(app.settings.pan);
+    }
+}
+
+/// The Follow box: the same setting as the Playback card's, reached here
+/// mid-listen.
+fn follow_box(app: &mut App, ui: &mut egui::Ui) {
+    let follow = ui
+        .checkbox(&mut app.settings.follow_playhead, "Follow")
+        .on_hover_text("Keep the playhead in view while playing");
+    help::offer_response(ui, &follow, Topic::FollowPlayhead);
+}
+
+/// The side-panel button and what clicking it does. Disabled, with a word
+/// about why, on a window too narrow to hold the panel at all — the panel is
+/// collapsed there whatever the setting says.
+fn sidebar_toggle(app: &mut App, ui: &mut egui::Ui) {
+    let room = app.sidebar_has_room(ui.ctx());
+    let open = app.settings.sidebar_open && room;
+    let resp = sidebar_button(ui, open, room);
+    let resp = if !room {
+        resp.on_hover_text("Too narrow a window for the readouts")
+    } else if open {
+        resp.on_hover_text("Hide the readouts")
+    } else {
+        resp.on_hover_text("Show the readouts")
+    };
+    help::offer_response(ui, &resp, Topic::SidePanel);
+    if resp.clicked() && room {
+        app.settings.sidebar_open = !app.settings.sidebar_open;
+    }
+}
+
+/// The help-mode button.
+fn help_button(app: &mut App, ui: &mut egui::Ui) {
+    if help::toggle_button(ui, app.help_mode, vec2(28.0, ROW_H))
+        .on_hover_text(if app.help_mode {
+            "Help mode on: hover anything labelled to read what it means (F1)"
+        } else {
+            "Help mode (F1)"
+        })
+        .clicked()
+    {
+        app.help_mode = !app.help_mode;
+    }
+}
+
+/// Everything the row had to shed, behind one button.
+fn overflow_menu(app: &mut App, ui: &mut egui::Ui, dress: Dress) {
+    ui.menu_button(
+        RichText::new(fonts::icon::MORE).size(fonts::HEADING),
+        |ui| {
+            ui.set_min_width(OVERFLOW_MENU_W);
+            overflow_items(app, ui, dress);
+        },
+    )
+    .response
+    .on_hover_text("What the window is too narrow to show");
+}
+
+/// What sits in that menu: whatever this dress left out of the bar. The
+/// sliders keep their own right-to-left rows, so they read here the way they
+/// read in the bar.
+fn overflow_items(app: &mut App, ui: &mut egui::Ui, dress: Dress) {
+    if !dress.mixer {
+        // Each on a row of its own, laid right to left so the label sits to
+        // the left of its slider as it does in the bar. The row's height is
+        // given rather than taken: a bare `with_layout` would claim all the
+        // height a menu can open to and centre one slider in it.
+        let row = vec2(ui.available_width(), ui.spacing().interact_size.y);
+        let right = egui::Layout::right_to_left(egui::Align::Center);
+        ui.allocate_ui_with_layout(row, right, |ui| gain_control(app, ui));
+        ui.allocate_ui_with_layout(row, right, |ui| pan_control(app, ui));
+        ui.separator();
+    }
+    if !dress.follow {
+        follow_box(app, ui);
+    }
+    if !dress.chrome {
+        ui.checkbox(&mut app.help_mode, "Help mode (F1)");
+        let taking = app.capture.is_some();
+        if ui
+            .add_enabled(!taking, egui::Button::new("Save a picture…"))
+            .on_hover_text("The views as a PNG, with a JSON beside it (Ctrl+Shift+S)")
+            .clicked()
+        {
+            app.save_screenshot();
+            ui.close();
+        }
+    }
+}
+
+/// Width the overflow menu opens at: enough for a slider and its label to sit
+/// on one line, as they do in the bar.
+const OVERFLOW_MENU_W: f32 = 230.0;
+
+/// The selected range, in the longest form that fits `spare`: both ends and
+/// the length, the length on its own, or — when there is not even room for
+/// that — nothing, the ruler's own band being the readout of last resort.
+fn selection_readout(ui: &mut egui::Ui, a: f64, b: f64, total: f64, spare: f32) {
+    let long = format!(
+        "{} – {}  ({})",
+        fmt_time_field(a, total),
+        fmt_time_field(b, total),
+        fmt_time_field(b - a, total)
+    );
+    let short = format!("({})", fmt_time_field(b - a, total));
+    let font = egui::TextStyle::Monospace.resolve(ui.style());
+    let width = |t: &str| {
+        ui.painter()
+            .layout_no_wrap(t.to_owned(), font.clone(), Color32::PLACEHOLDER)
+            .size()
+            .x
+    };
+    let (long_w, short_w) = (width(&long), width(&short));
+    let text = if long_w <= spare {
+        long
+    } else if short_w <= spare {
+        short
+    } else {
+        return;
+    };
+    ui.label(
+        RichText::new(text)
+            .monospace()
+            .color(Color32::from_gray(170)),
+    );
 }
 
 /// Where a gain sits on its colour ramp: the hue its far end wears, and how far
@@ -234,8 +541,8 @@ const METER_CLIP_DB: f32 = -0.2;
 
 /// The stereo output meter: one bar per device channel, peak ballistics with
 /// a hold marker, and the same number in dBFS beside it.
-fn out_meter(app: &App, ui: &mut egui::Ui) {
-    let (rect, resp) = ui.allocate_exact_size(vec2(METER_W, ROW_H), Sense::hover());
+fn out_meter(app: &App, ui: &mut egui::Ui, width: f32) {
+    let (rect, resp) = ui.allocate_exact_size(vec2(width, ROW_H), Sense::hover());
     let p = ui.painter_at(rect);
     const LABEL_COL: f32 = 10.0;
     const VALUE_COL: f32 = 40.0;
@@ -457,6 +764,52 @@ fn camera_icon(ui: &mut egui::Ui, active: bool) -> egui::Response {
 
 /// A sliders glyph for the settings button: three tracks with a knob each,
 /// drawn as vectors so no fallback font decides how it looks.
+/// The side-panel button: a window with its right-hand column filled in while
+/// the panel is open and hollow while it is not. Painted like the buttons
+/// beside it rather than set as a glyph, so it carries the same weight.
+///
+/// It sits at the right end of the bar, against the panel it opens, and it is
+/// never shed: it is how the window's space is won back.
+fn sidebar_button(ui: &mut egui::Ui, open: bool, enabled: bool) -> egui::Response {
+    let (resp, painter) = ui.allocate_painter(vec2(28.0, ROW_H), Sense::click());
+    let visuals = ui.style().visuals.clone();
+    let fg = if !enabled {
+        Color32::from_gray(110)
+    } else if open {
+        visuals.widgets.active.fg_stroke.color
+    } else if resp.hovered() {
+        Color32::WHITE
+    } else {
+        Color32::from_gray(215)
+    };
+    if enabled && (open || resp.hovered()) {
+        let bg = if open {
+            visuals.widgets.active.weak_bg_fill
+        } else {
+            visuals.widgets.hovered.weak_bg_fill
+        };
+        painter.rect_filled(resp.rect, 4.0, bg);
+    }
+    let c = resp.rect.center();
+    let body = Rect::from_center_size(c, vec2(17.0, 13.0));
+    painter.rect_stroke(body, 2.0, Stroke::new(1.3, fg), egui::StrokeKind::Inside);
+    // The column that is the panel: filled when it is there to be seen.
+    let split = body.right() - 6.0;
+    if open {
+        painter.rect_filled(
+            Rect::from_min_max(pos2(split, body.top()), body.max),
+            0.0,
+            fg,
+        );
+    } else {
+        painter.line_segment(
+            [pos2(split, body.top()), pos2(split, body.bottom())],
+            Stroke::new(1.0, fg.gamma_multiply(0.6)),
+        );
+    }
+    resp
+}
+
 fn settings_button(ui: &mut egui::Ui, active: bool) -> egui::Response {
     let (resp, painter) = ui.allocate_painter(vec2(28.0, ROW_H), Sense::click());
     let visuals = ui.style().visuals.clone();

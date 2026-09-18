@@ -32,6 +32,7 @@ pub mod icon {
     pub const COGS: &str = "\u{f085}";
     pub const CLOCK: &str = "\u{f017}";
     pub const PLAY: &str = "\u{f04b}";
+    pub const MORE: &str = "\u{f141}";
     pub const MARKER: &str = "\u{f0c5}";
     pub const WARN: &str = "\u{f071}";
     pub const INFO: &str = "\u{f05a}";

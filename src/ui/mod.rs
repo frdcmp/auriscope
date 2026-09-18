@@ -32,6 +32,11 @@ pub const DEFAULT_WAVE_COLOR: [u8; 3] = [86, 156, 214];
 /// Default spectrum colour: the lighter blue the live curve has always been.
 pub const DEFAULT_SPECTRUM_COLOR: [u8; 3] = [120, 200, 255];
 
+/// Width the window has to have before the side panel is worth drawing: its
+/// own minimum plus enough left over for the views to still be views. Below
+/// it the panel collapses whatever the setting says, and its button says why.
+pub const SIDEBAR_MIN_ROOM: f32 = 720.0;
+
 /// How many files the history keeps. Long enough to cover a session's worth of
 /// takes, short enough that the menu stays a menu.
 pub const RECENT_MAX: usize = 12;
@@ -74,6 +79,10 @@ pub struct Settings {
     /// Vertical (amplitude) zoom of the waveform strip; 1.0 fits ±1.
     pub wave_v_zoom: f32,
     pub follow_playhead: bool,
+    /// Whether the side panel of readouts is open. A wish rather than a
+    /// state: a window with no room for it collapses it anyway, and it comes
+    /// back when there is room again. See [`App::sidebar_shown`].
+    pub sidebar_open: bool,
     pub show_rms: bool,
     /// Start playing as soon as a file finishes loading, rather than waiting
     /// for the space bar.
@@ -132,6 +141,7 @@ impl Default for Settings {
             show_db_scale: true,
             wave_v_zoom: 1.0,
             follow_playhead: true,
+            sidebar_open: true,
             show_rms: true,
             autoplay: true,
             autoplay_startup: true,
@@ -442,6 +452,18 @@ impl App {
             notice: None,
             screenshot: std::env::var_os("AURISCOPE_SCREENSHOT").map(|p| (PathBuf::from(p), None)),
         }
+    }
+
+    /// Whether the side panel is drawn: open by wish, and only while the
+    /// window can give it its minimum without squeezing the views to
+    /// nothing.
+    fn sidebar_shown(&self, ctx: &egui::Context) -> bool {
+        self.settings.sidebar_open && self.sidebar_has_room(ctx)
+    }
+
+    /// Whether there is room for the side panel at all.
+    fn sidebar_has_room(&self, ctx: &egui::Context) -> bool {
+        ctx.viewport_rect().width() >= SIDEBAR_MIN_ROOM
     }
 
     fn total_frames(&self) -> f64 {
@@ -1329,7 +1351,9 @@ impl eframe::App for App {
         panels::title_bar(self, ui);
         panels::top_bar(self, ui);
         panels::status_bar(self, ui);
-        panels::side_panel(self, ui);
+        if self.sidebar_shown(ctx) {
+            panels::side_panel(self, ui);
+        }
         // The views' own corner of the window, remembered for the capture: the
         // spectrum panel when it is shown, and the waveform and spectrogram
         // above it. Everything else — the bars, the sidebar, the dialog — is

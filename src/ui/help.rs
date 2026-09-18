@@ -250,6 +250,7 @@ pub enum Topic {
 
     // ---- status bar ----------------------------------------------------
     InterfaceScale,
+    SidePanel,
 
     // ---- settings: cards -----------------------------------------------
     PanesCard,
@@ -677,6 +678,14 @@ impl Topic {
                  a moment. It measures the output, not the file, so gain and pan move it.",
             ),
 
+            T::SidePanel => (
+                "Readouts",
+                "The column of cards down the right: what the file is, what it measures, and \
+                 what the pointer is over. Hiding it gives the width to the waveform and the \
+                 spectrogram, which is what a narrow window wants — and a window too narrow \
+                 for both hides it for you until there is room again.",
+            ),
+
             // ---- settings: cards ---------------------------------------
             T::PanesCard => (
                 "Panes",
@@ -1019,6 +1028,7 @@ mod tests {
         Topic::LoopToggle,
         Topic::OutputMeter,
         Topic::InterfaceScale,
+        Topic::SidePanel,
         Topic::PanesCard,
         Topic::SpectrogramCard,
         Topic::WaveformCard,
