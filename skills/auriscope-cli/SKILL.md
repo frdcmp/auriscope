@@ -296,3 +296,47 @@ Be straight with the user about these rather than guessing:
   the user's.
 
 It also never writes to the audio: `analyze` and `render` only read.
+
+## Installing this skill somewhere else
+
+The skill is four files inside the auriscope checkout, at `skills/auriscope-cli/`.
+**Symlink it into place rather than copying it.** A copy is a fork from the moment either
+side is edited, and the copy under `~/.claude/skills` is the one nobody remembers to
+update — so it silently describes an older CLI than the one installed.
+
+```bash
+ln -s "$PWD/skills/auriscope-cli" ~/.claude/skills/auriscope-cli   # run from a checkout
+```
+
+The target has to be **absolute**. A relative one resolves against the link's own
+directory, not the working directory, which produces a dead link that looks fine in `ls`.
+
+Two places it can go:
+
+| | |
+| :--- | :--- |
+| `~/.claude/skills/` | every project, this user |
+| `<project>/.claude/skills/` | that project only — commit the link and the team gets it |
+
+On Windows, in PowerShell with Developer Mode on (or an elevated prompt):
+
+```powershell
+New-Item -ItemType SymbolicLink -Path $HOME\.claude\skills\auriscope-cli `
+                                -Target C:\path\to\auriscope\skills\auriscope-cli
+```
+
+`install.sh` **copies** instead, and that is right for someone who has no checkout: they
+get the skill alongside the binary and never edit it. Symlink when there is a checkout to
+point at.
+
+If a copied `auriscope-cli/` is already sitting there, delete it first. `ln -s` will not
+replace a directory — handed an existing one it creates the link *inside* it, leaving
+`~/.claude/skills/auriscope-cli/auriscope-cli`, which Claude Code does not load and which
+looks like it worked.
+
+Check it took — `ls -l ~/.claude/skills/` should show the arrow, and the skill should
+appear in Claude Code's skill list on the next start:
+
+```bash
+ls -l ~/.claude/skills/auriscope-cli   # -> /path/to/auriscope/skills/auriscope-cli
+```
