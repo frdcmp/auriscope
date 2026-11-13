@@ -2,7 +2,7 @@
   <img src="assets/icon.png" width="96" alt="Auriscope logo" />
 
   # Auriscope
-
+  [简体中文](docs/README_zh-CN.md)
   ### An audio player and analyser for Linux and Windows
 
   *Play a file, and **see** it: waveform, spectrogram and realtime spectrum.*
